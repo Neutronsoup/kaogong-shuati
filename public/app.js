@@ -4585,8 +4585,8 @@ async function renderWrongTab(view) {
   const g = groups.find((x) => x.key === tab) || { key: tab, name, count: 0, subs: [] };
   const card = el('div', 'card', `<h3>${esc(name)}错题共 ${g.count} 条</h3>
     <button class="btn btn-primary btn-block" id="wrong-random">${ico('play', 15)} 随机练习（从${esc(name)}错题抽 10-15 题）</button>
-    <button class="btn btn-ghost btn-block" id="wrong-organize">${ico('folderTree', 15)} 一键整理（自动归类历史未分类错题）</button>
-    <button class="btn btn-danger btn-block" id="clear-wrong">${ico('trash', 15)} 清空${esc(name)}错题</button>
+    <button class="btn btn-ghost btn-block" id="wrong-organize" style="margin-top:12px">${ico('folderTree', 15)} 一键整理（自动归类历史未分类错题）</button>
+    <button class="btn btn-danger btn-block" id="clear-wrong" style="margin-top:12px">${ico('trash', 15)} 清空${esc(name)}错题</button>
     <div class="li-tip">${ico('lightbulb', 13)} 点击子模块查看对应错题，点击错题可直接重做</div>`);
   view.appendChild(card);
   $('#wrong-random').onclick = () => startWrongRandom(tab, '');
