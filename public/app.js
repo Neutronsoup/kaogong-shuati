@@ -594,7 +594,7 @@ function renderLogin() {
         <button class="login-tab" data-tab="register">注册</button>
       </div>
       <label class="login-field"><span>昵称</span><input id="lg-username" type="text" autocomplete="username" maxlength="20" placeholder="请输入昵称"></label>
-      <label class="login-field"><span>密码</span><input id="lg-password" type="password" autocomplete="current-password" maxlength="64" placeholder="至少 6 位"></label>
+      <label class="login-field"><span>密码</span><input id="lg-password" type="password" autocomplete="current-password" maxlength="64" placeholder="请输入密码"></label>
       <label class="login-field" id="lg-invite-wrap" style="display:none"><span>邀请码</span><input id="lg-invite" type="text" autocomplete="off" placeholder="请填写邀请码"></label>
       <div class="login-error" id="lg-error"></div>
       <button class="btn btn-primary btn-block" id="lg-submit">登录</button>
@@ -691,8 +691,17 @@ async function renderProfile() {
 
   const actions = el('div', 'card profile-actions');
   if (u) {
-    actions.innerHTML = `<button class="btn btn-ghost btn-block" id="pf-logout">退出登录</button>`;
+    actions.innerHTML = `
+      <button class="btn btn-ghost btn-block" id="pf-pass">修改密码</button>
+      <button class="btn btn-ghost btn-block" id="pf-logoutall" style="margin-top:8px">退出所有设备</button>
+      <button class="btn btn-ghost btn-block" id="pf-logout" style="margin-top:8px">退出登录</button>`;
     view.appendChild(actions);
+    $('#pf-pass').onclick = () => openChangePassword();
+    $('#pf-logoutall').onclick = async () => {
+      const btn = $('#pf-logoutall'); btn.disabled = true; btn.textContent = '处理中…';
+      try { await authFetchJSON('/api/auth/logout-all', { method: 'POST' }); } catch {}
+      setToken(null); store.user = null; store.guest = false; renderLogin();
+    };
     $('#pf-logout').onclick = async () => {
       const btn = $('#pf-logout');
       btn.disabled = true; btn.textContent = '退出中…';
@@ -707,6 +716,37 @@ async function renderProfile() {
     $('#pf-login').onclick = () => renderLogin();
   }
 
+}
+
+// 修改密码弹层
+function openChangePassword() {
+  if (document.querySelector('.cp-overlay')) return;
+  const o = el('div', 'sheet-overlay cp-overlay');
+  o.innerHTML = `<div class="sheet">
+    <div class="sheet-head"><b>修改密码</b></div>
+    <div class="login-field"><span>原密码</span><input id="cp-old" type="password" autocomplete="current-password" class="field-input"></div>
+    <div class="login-field"><span>新密码（≥8 位，含字母和数字）</span><input id="cp-new" type="password" autocomplete="new-password" class="field-input"></div>
+    <div class="login-error" id="cp-err"></div>
+    <button class="btn btn-primary btn-block" id="cp-save">保存</button>
+  </div>`;
+  document.body.appendChild(o);
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  const err = o.querySelector('#cp-err');
+  const btn = o.querySelector('#cp-save');
+  btn.onclick = async () => {
+    const oldPassword = o.querySelector('#cp-old').value;
+    const newPassword = o.querySelector('#cp-new').value;
+    err.textContent = '';
+    if (!oldPassword || !newPassword) { err.textContent = '请填写原密码和新密码'; return; }
+    if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) { err.textContent = '新密码至少 8 位，且需含字母和数字'; return; }
+    btn.disabled = true; btn.textContent = '保存中…';
+    try {
+      const r = await authFetchJSON('/api/auth/password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ oldPassword, newPassword }) });
+      const j = r.json || {};
+      if (j.ok) { setToken(j.data.token); toast('密码已修改'); o.remove(); }
+      else { err.textContent = (j.error && j.error.message) || '修改失败'; btn.disabled = false; btn.textContent = '保存'; }
+    } catch (e) { err.textContent = e.message || '网络错误'; btn.disabled = false; btn.textContent = '保存'; }
+  };
 }
 
 // ---------- 首页 ----------
@@ -2798,15 +2838,54 @@ const TYPE_NAME = { 1: '单选', 2: '多选', 3: '判断', 5: '判断', 21: '申
 // ---------- HTML 净化：仅放行常用标签，防注入 ----------
 function sanitizeHtml(h) {
   if (!h) return '';
-  let s = String(h)
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
-  // 实体解码后局部删除危险协议（防 java&#x73;cript: 绕过；不整段清空，避免误伤正常题干）
-  const decoded = s.replace(/&#x([0-9a-f]+);/gi, (m, hx) => String.fromCharCode(parseInt(hx, 16)))
-                   .replace(/&#(\d+);/g, (m, d) => String.fromCharCode(parseInt(d, 10)));
-  return decoded.replace(/javascript:|vbscript:|data:text\/html/gi, '');
+  try {
+    const doc = new DOMParser().parseFromString(String(h), 'text/html');
+    const ALLOW = new Set(['P','BR','SPAN','DIV','B','STRONG','I','EM','U','S','SUB','SUP','UL','OL','LI','TABLE','THEAD','TBODY','TFOOT','TR','TD','TH','IMG','HR','BLOCKQUOTE','CODE','PRE','H1','H2','H3','H4','H5','H6','A','FIGURE','FIGCAPTION','SMALL','MARK']);
+    const DROP = new Set(['script','style','iframe','object','embed','form','input','button','link','meta','base','noscript','template','svg','math','video','audio','source']);
+    const ATTR = { IMG: new Set(['src','alt','width','height','title']), A: new Set(['href','title']), TD: new Set(['colspan','rowspan']), TH: new Set(['colspan','rowspan']) };
+    const safeUrl = (v, kind) => {
+      const raw = String(v || '').trim();
+      const low = raw.toLowerCase().replace(/[\u0000-\u0020]+/g, '');
+      if (low.startsWith('javascript:') || low.startsWith('vbscript:') || low.startsWith('data:text/html')) return null;
+      if (kind === 'img') return /^(https?:|data:image\/|blob:|\/|\.\/|\.\.\/|#)/i.test(raw) ? raw : null;
+      return /^(https?:|\/|\.\/|\.\.\/|#|mailto:)/i.test(raw) ? raw : null;
+    };
+    const cleanStyle = (v) => String(v || '').replace(/expression|javascript:|vbscript:|url\s*\(|@import|behavior/gi, '');
+    const walk = (node) => {
+      const out = [];
+      node.childNodes.forEach((n) => {
+        if (n.nodeType === 3) { out.push(document.createTextNode(n.nodeValue)); return; }
+        if (n.nodeType !== 1) return;
+        const tag = n.tagName.toUpperCase();
+        const lowTag = tag.toLowerCase();
+        if (DROP.has(lowTag)) return;             // 危险标签：连内容一起丢弃
+        if (!ALLOW.has(tag)) { out.push(...walk(n)); return; } // 未知标签：保留子节点（去壳）
+        const e = document.createElement(lowTag);
+        const allow = ATTR[tag];
+        for (const a of Array.from(n.attributes)) {
+          const name = a.name.toLowerCase();
+          if (name.startsWith('on')) continue;     // 事件处理器一律丢弃
+          if (name === 'style') { e.setAttribute('style', cleanStyle(a.value)); continue; }
+          if (name === 'class') { e.setAttribute('class', a.value); continue; }
+          if (name === 'href' || name === 'src') {
+            if (allow && allow.has(name)) { const u = safeUrl(a.value, name === 'src' ? 'img' : 'a'); if (u) e.setAttribute(name, u); }
+            continue;
+          }
+          if (allow && allow.has(name)) e.setAttribute(name, a.value);
+        }
+        if (tag === 'A') e.setAttribute('rel', 'noopener noreferrer');
+        if (tag === 'IMG') e.setAttribute('loading', 'lazy');
+        const kids = walk(n);
+        if (kids.length) e.appendChild(...kids);
+        out.push(e);
+      });
+      return out;
+    };
+    const wrap = document.createElement('div');
+    const nodes = walk(doc.body);
+    if (nodes.length) wrap.appendChild(...nodes);
+    return wrap.innerHTML;
+  } catch { return ''; }
 }
 // 渲染题目内容：优先 contentHtml（含图片/公式），否则纯文本
 function renderContent(el, q) {

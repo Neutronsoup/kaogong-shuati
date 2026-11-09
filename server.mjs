@@ -387,6 +387,17 @@ function aiRateAllow(id) {
   return a.count <= 30;
 }
 
+// 通用固定窗口限流工具
+const globalRate = new Map();
+const heavyRate = new Map();
+function windowAllow(map, key, limit, windowMs) {
+  const now = Date.now();
+  let a = map.get(key);
+  if (!a || now > a.reset) { a = { count: 0, reset: now + windowMs }; map.set(key, a); }
+  a.count += 1;
+  return a.count <= limit;
+}
+
 // 注册限流：同一 IP 每 10 分钟最多 10 次尝试
 const regRate = new Map();
 function regRateAllow(ip) {
@@ -1546,6 +1557,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https: wss:; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
 
   // ---- API ----
   if (pathname.startsWith('/api/')) {
@@ -1559,6 +1571,16 @@ const server = http.createServer(async (req, res) => {
       // 取消游客模式：除 /api/auth/* 外，所有接口必须登录
       if (!pathname.startsWith('/api/auth/') && !req.user) {
         return json(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
+      }
+
+      // 全局限流：登录用户按 user id、未登录按真实 IP；重接口更严格
+      const _rlKey = req.user ? ('u' + req.user.id) : ('ip' + clientIp(req));
+      if (!windowAllow(globalRate, _rlKey, 300, 60000)) {
+        return json(res, 429, { ok: false, error: { code: 'RATE_LIMITED', message: '请求过于频繁，请稍后再试' } });
+      }
+      if ((pathname === '/api/practice' || pathname === '/api/paper/generate' || pathname === '/api/custom/practice')
+          && !windowAllow(heavyRate, _rlKey, 40, 60000)) {
+        return json(res, 429, { ok: false, error: { code: 'RATE_LIMITED', message: '操作过于频繁，请稍后再试' } });
       }
 
       // AI 配置/技能管理类接口：仅管理员（防止普通用户改 base_url 导致 key 外泄）
@@ -1644,6 +1666,26 @@ const server = http.createServer(async (req, res) => {
       // 退出登录
       if (pathname === '/api/auth/logout' && req.method === 'POST') {
         if (_bearer) auth.deleteSession(_bearer);
+        return json(res, 200, { ok: true, data: null });
+      }
+      // 修改自己的密码（校验原密码；成功后吊销所有旧会话并重新签发 token）
+      if (pathname === '/api/auth/password' && req.method === 'POST') {
+        const body = await readBody(req);
+        const { oldPassword, newPassword } = JSON.parse(body || '{}');
+        if (!req.user) return json(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
+        const u = auth.findUserByName(req.user.username);
+        if (!u || !auth.verifyPassword(oldPassword || '', u.password_hash)) {
+          return json(res, 200, { ok: false, error: { code: 'BAD_PASSWORD', message: '原密码错误' } });
+        }
+        try { auth.setPassword(u.id, newPassword); }
+        catch (e) { return json(res, 200, { ok: false, error: { code: e.code || 'BAD_PASSWORD', message: e.message } }); }
+        pdb.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+        const token = auth.createSession(u.id, req.headers['user-agent'] || '');
+        return json(res, 200, { ok: true, data: { token } });
+      }
+      // 退出所有设备（吊销该用户全部会话）
+      if (pathname === '/api/auth/logout-all' && req.method === 'POST') {
+        if (req.user) pdb.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.user.id);
         return json(res, 200, { ok: true, data: null });
       }
       // 当前用户（校验 token）
@@ -1798,9 +1840,9 @@ const server = http.createServer(async (req, res) => {
         // 自定义题：custom- 前缀 → 从 custom_questions 取（错题/收藏重做入口）
         if (String(raw).startsWith('custom-')) {
           const cid = Number(String(raw).replace(/^custom-/, ''));
-          const cr = pdb.prepare('SELECT * FROM custom_questions WHERE id = ?').get(cid);
+          const cr = pdb.prepare('SELECT * FROM custom_questions WHERE id = ? AND user_id = ?').get(cid, req.user.id);
           if (!cr) return err(res, 404, '题目不存在');
-          const b = pdb.prepare('SELECT name, subject FROM custom_batches WHERE id = ?').get(cr.batch_id) || {};
+          const b = pdb.prepare('SELECT name, subject FROM custom_batches WHERE id = ? AND user_id = ?').get(cr.batch_id, req.user.id) || {};
           const { contentHtml, materialHtml } = customQuestionHtml({ ...cr, images: parseImages(cr.images) });
           return json(res, 200, {
             questionId: String(raw), id: String(raw), type: 'custom',
@@ -2023,7 +2065,7 @@ const server = http.createServer(async (req, res) => {
           let type = null;
           if (String(r.question_id).startsWith('custom-')) {
             const cid = Number(String(r.question_id).replace(/^custom-/, ''));
-            const cr = pdb.prepare('SELECT prompt, images FROM custom_questions WHERE id = ?').get(cid);
+            const cr = pdb.prepare('SELECT prompt, images FROM custom_questions WHERE id = ? AND user_id = ?').get(cid, req.user.id);
             if (cr) { content = cr.prompt + (parseImages(cr.images).length ? ' [图]' : ''); type = 'custom'; }
           } else {
             const q = qQuestionById.get(r.question_id);
@@ -2100,7 +2142,7 @@ const server = http.createServer(async (req, res) => {
           let type = null;
           if (String(r.question_id).startsWith('custom-')) {
             const cid = Number(String(r.question_id).replace(/^custom-/, ''));
-            const cr = pdb.prepare('SELECT prompt, images FROM custom_questions WHERE id = ?').get(cid);
+            const cr = pdb.prepare('SELECT prompt, images FROM custom_questions WHERE id = ? AND user_id = ?').get(cid, req.user.id);
             if (cr) { content = cr.prompt + (parseImages(cr.images).length ? ' [图]' : ''); type = 'custom'; }
           } else {
             const q = qQuestionById.get(r.question_id);
@@ -2154,7 +2196,7 @@ const server = http.createServer(async (req, res) => {
         let q = null;
         if (String(questionId).startsWith('custom-')) {
           const cid = Number(String(questionId).replace(/^custom-/, ''));
-          const r = pdb.prepare('SELECT * FROM custom_questions WHERE id = ?').get(cid);
+          const r = pdb.prepare('SELECT * FROM custom_questions WHERE id = ? AND user_id = ?').get(cid, req.user.id);
           if (r) q = { content: r.prompt, material: r.material || '', options: r.options, answer: r.answer || '', answerIndex: r.answer_index == null ? -1 : Number(r.answer_index), analysis: r.analysis || '', type: 'custom' };
         } else {
           q = qQuestionById.get(questionId);
@@ -2169,14 +2211,16 @@ const server = http.createServer(async (req, res) => {
         const { name, questions, subject } = JSON.parse(body || '{}');
         if (!name || !Array.isArray(questions) || questions.length === 0) return err(res, 400, '缺少批次名或题目');
         const subj = String(subject || '').trim() || '自定义';
-        const ins = pdb.prepare('INSERT INTO custom_questions (batch_id, prompt, material, options, answer, answer_index, analysis, images, material_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        const uid = req.user.id;
+        const ins = pdb.prepare('INSERT INTO custom_questions (batch_id, user_id, prompt, material, options, answer, answer_index, analysis, images, material_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         let batchId;
         withTx(() => {
-          const tb = pdb.prepare('INSERT INTO custom_batches (name, subject) VALUES (?, ?)').run(String(name).trim(), subj);
+          const tb = pdb.prepare('INSERT INTO custom_batches (name, subject, user_id) VALUES (?, ?, ?)').run(String(name).trim(), subj, uid);
           batchId = tb.lastInsertRowid;
           for (const q of questions) {
             ins.run(
               batchId,
+              uid,
               String(q.prompt ?? '').trim(),
               String(q.material ?? ''),
               JSON.stringify(Array.isArray(q.options) ? q.options : []),
@@ -2195,14 +2239,16 @@ const server = http.createServer(async (req, res) => {
         const rows = pdb.prepare(`
           SELECT b.id, b.name, b.subject, b.created_at,
                  (SELECT COUNT(*) FROM custom_questions c WHERE c.batch_id = b.id) AS count
-          FROM custom_batches b ORDER BY b.id DESC
-        `).all();
+          FROM custom_batches b WHERE b.user_id = ? ORDER BY b.id DESC
+        `).all(req.user.id);
         return json(res, 200, { batches: rows.map((r) => ({ ...r, count: Number(r.count) })) });
       }
       // 批次内题目列表
       if (pathname === '/api/custom/questions' && req.method === 'GET') {
         const batchId = Number(url.searchParams.get('batch_id') || 0);
         if (!batchId) return err(res, 400, '缺少 batch_id');
+        const ownB = pdb.prepare('SELECT id FROM custom_batches WHERE id = ? AND user_id = ?').get(batchId, req.user.id);
+        if (!ownB) return err(res, 404, '批次不存在');
         const rows = pdb.prepare('SELECT id, batch_id, prompt, material, options, answer, answer_index, analysis, images, material_id FROM custom_questions WHERE batch_id = ? ORDER BY id ASC').all(batchId);
         return json(res, 200, { questions: rows.map((r) => ({ ...r, images: parseImages(r.images), options: JSON.parse(r.options || '[]') })) });
       }
@@ -2212,6 +2258,8 @@ const server = http.createServer(async (req, res) => {
         const { id, name, subject } = JSON.parse(body || '{}');
         const nid = Number(id);
         if (!nid || !String(name || '').trim()) return err(res, 400, '缺少 id 或批次名');
+        const ownB = pdb.prepare('SELECT id FROM custom_batches WHERE id = ? AND user_id = ?').get(nid, req.user.id);
+        if (!ownB) return err(res, 404, '批次不存在');
         const s = String(subject ?? '').trim();
         if (s) {
           pdb.prepare("UPDATE custom_batches SET name = ?, subject = ?, updated_at = datetime('now','localtime') WHERE id = ?").run(String(name).trim(), s, nid);
@@ -2226,6 +2274,8 @@ const server = http.createServer(async (req, res) => {
         const { ids, name } = JSON.parse(body || '{}');
         const idList = (Array.isArray(ids) ? ids : []).map(Number).filter(Boolean);
         if (idList.length < 2) return err(res, 400, '至少选择两个批次');
+        const owned = pdb.prepare(`SELECT id FROM custom_batches WHERE user_id = ? AND id IN (${idList.map(() => '?').join(',')})`).all(req.user.id, ...idList);
+        if (owned.length !== idList.length) return err(res, 404, '部分批次不存在');
         const target = Math.min(...idList);
         const others = idList.filter((x) => x !== target);
         withTx(() => {
@@ -2249,11 +2299,11 @@ const server = http.createServer(async (req, res) => {
         const bid = Number(batch_id);
         const qids = (Array.isArray(question_ids) ? question_ids : []).map(Number).filter(Boolean);
         if (!bid || qids.length === 0) return err(res, 400, '缺少批次或题目');
-        const src = pdb.prepare('SELECT name, subject FROM custom_batches WHERE id = ?').get(bid);
+        const src = pdb.prepare('SELECT name, subject FROM custom_batches WHERE id = ? AND user_id = ?').get(bid, req.user.id);
         if (!src) return err(res, 404, '批次不存在');
         const splitN = pdb.prepare("SELECT COUNT(*) n FROM custom_batches WHERE name LIKE ?").get(src.name + '-拆分%').n;
         const newName = String(name || '').trim() || `${src.name}-拆分${splitN + 1}`;
-        const tb = pdb.prepare('INSERT INTO custom_batches (name, subject) VALUES (?, ?)').run(newName, (src.subject || '自定义').trim() || '自定义');
+        const tb = pdb.prepare('INSERT INTO custom_batches (name, subject, user_id) VALUES (?, ?, ?)').run(newName, (src.subject || '自定义').trim() || '自定义', req.user.id);
         const nb = tb.lastInsertRowid;
         withTx(() => {
           for (const qid of qids) {
@@ -2267,6 +2317,8 @@ const server = http.createServer(async (req, res) => {
       if (pathname === '/api/custom/batch' && req.method === 'DELETE') {
         const bid = Number(url.searchParams.get('id') || 0);
         if (!bid) return err(res, 400, '缺少 id');
+        const ownB = pdb.prepare('SELECT id FROM custom_batches WHERE id = ? AND user_id = ?').get(bid, req.user.id);
+        if (!ownB) return err(res, 404, '批次不存在');
         withTx(() => {
           pdb.prepare('DELETE FROM custom_questions WHERE batch_id = ?').run(bid);
           pdb.prepare('DELETE FROM custom_batches WHERE id = ?').run(bid);
@@ -2280,6 +2332,8 @@ const server = http.createServer(async (req, res) => {
         const { id, prompt, material, options, answer, answer_index, analysis, images } = parsed;
         const qid = Number(id);
         if (!qid) return err(res, 400, '缺少 id');
+        const ownQ = pdb.prepare('SELECT id FROM custom_questions WHERE id = ? AND user_id = ?').get(qid, req.user.id);
+        if (!ownQ) return err(res, 404, '题目不存在');
         if (Object.prototype.hasOwnProperty.call(parsed, 'material_id')) {
           // 材料分组接口显式传 material_id：更新之（含清空 = ''）
           pdb.prepare(`
@@ -2318,6 +2372,8 @@ const server = http.createServer(async (req, res) => {
       if (pathname === '/api/custom/question' && req.method === 'DELETE') {
         const qid = Number(url.searchParams.get('id') || 0);
         if (!qid) return err(res, 400, '缺少 id');
+        const ownQ = pdb.prepare('SELECT id FROM custom_questions WHERE id = ? AND user_id = ?').get(qid, req.user.id);
+        if (!ownQ) return err(res, 404, '题目不存在');
         pdb.prepare('DELETE FROM custom_questions WHERE id = ?').run(qid);
         return json(res, 200, { ok: true });
       }
@@ -2327,7 +2383,7 @@ const server = http.createServer(async (req, res) => {
         const { ids, action, groupId } = JSON.parse(body || '{}');
         const idList = (Array.isArray(ids) ? ids : []).map(Number).filter(Boolean);
         if (!idList.length) return err(res, 400, '请先勾选题目');
-        const exists = pdb.prepare(`SELECT id FROM custom_questions WHERE id IN (${idList.map(() => '?').join(',')})`).all(...idList);
+        const exists = pdb.prepare(`SELECT id FROM custom_questions WHERE id IN (${idList.map(() => '?').join(',')}) AND user_id = ?`).all(...idList, req.user.id);
         if (exists.length !== idList.length) return err(res, 404, '部分题目不存在');
         if (action === 'ungroup') {
           pdb.prepare(`UPDATE custom_questions SET material_id = '' WHERE id IN (${idList.map(() => '?').join(',')})`).run(...idList);
@@ -2341,7 +2397,7 @@ const server = http.createServer(async (req, res) => {
       if (pathname === '/api/custom/practice' && req.method === 'GET') {
         const bid = Number(url.searchParams.get('batch_id') || 0);
         if (!bid) return err(res, 400, '缺少 batch_id');
-        const b = pdb.prepare('SELECT id, name, subject FROM custom_batches WHERE id = ?').get(bid);
+        const b = pdb.prepare('SELECT id, name, subject FROM custom_batches WHERE id = ? AND user_id = ?').get(bid, req.user.id);
         if (!b) return err(res, 404, '批次不存在');
         const bSubj = (b.subject || '自定义').trim() || '自定义';
         // 题量截断（0=全部，max 100）；保护材料组完整：若截断位置处于组中间，向后延伸到组末
@@ -2387,6 +2443,8 @@ const server = http.createServer(async (req, res) => {
         const { batch_id } = JSON.parse(body || '{}');
         const bid = Number(batch_id);
         if (!bid) return err(res, 400, '缺少 batch_id');
+        const ownB = pdb.prepare('SELECT id FROM custom_batches WHERE id = ? AND user_id = ?').get(bid, req.user.id);
+        if (!ownB) return err(res, 404, '批次不存在');
         const rows = pdb.prepare('SELECT id, material FROM custom_questions WHERE batch_id = ? ORDER BY id ASC').all(bid);
         // 归一化：去 HTML 标签、去空白（避免字距空格/换行干扰指纹）
         const norm = (s) => String(s || '').trim().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -2420,7 +2478,7 @@ const server = http.createServer(async (req, res) => {
         const { questionId, selected, batchId, chapter } = JSON.parse(body || '{}');
         const cid = Number(String(questionId || '').replace(/^custom-/, ''));
         if (!cid) return err(res, 400, '缺少 questionId');
-        const q = pdb.prepare('SELECT * FROM custom_questions WHERE id = ?').get(cid);
+        const q = pdb.prepare('SELECT * FROM custom_questions WHERE id = ? AND user_id = ?').get(cid, req.user.id);
         if (!q) return err(res, 404, '题目不存在');
         const fq = {
           content: q.prompt,
@@ -2432,7 +2490,7 @@ const server = http.createServer(async (req, res) => {
           type: 'custom',
         };
         const result = checkAnswer(fq, selected);
-        const bm = pdb.prepare('SELECT name, subject FROM custom_batches WHERE id = ?').get(Number(batchId || 0));
+        const bm = pdb.prepare('SELECT name, subject FROM custom_batches WHERE id = ? AND user_id = ?').get(Number(batchId || 0), req.user.id);
         const ch = chapter || (bm && bm.name) || '';
         const subj = (bm && (bm.subject || '').trim()) || '自定义';
         // 自定义题归档固定归「自定义题库」（不分子模块）
@@ -2562,7 +2620,7 @@ const server = http.createServer(async (req, res) => {
           if (String(r.question_id).startsWith('custom-')) {
             // 自定义题：题面从 custom_questions 取
             const cid = Number(String(r.question_id).replace(/^custom-/, ''));
-            const cr = pdb.prepare('SELECT prompt, images FROM custom_questions WHERE id = ?').get(cid);
+            const cr = pdb.prepare('SELECT prompt, images FROM custom_questions WHERE id = ? AND user_id = ?').get(cid, req.user.id);
             if (cr) q = { content: cr.prompt + (parseImages(cr.images).length ? ' [图]' : ''), type: 'custom' };
           } else {
             q = qQuestionById.get(r.question_id);
@@ -2819,7 +2877,7 @@ const server = http.createServer(async (req, res) => {
           };
         } else if (String(questionId).startsWith('custom-')) {
           const cid = Number(String(questionId).replace(/^custom-/, ''));
-          const cr = pdb.prepare('SELECT * FROM custom_questions WHERE id = ?').get(cid);
+          const cr = pdb.prepare('SELECT * FROM custom_questions WHERE id = ? AND user_id = ?').get(cid, req.user.id);
           if (cr) {
             customMaterial = String(cr.material || '').trim();
             q = {

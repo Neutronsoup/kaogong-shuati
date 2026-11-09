@@ -13,7 +13,7 @@ const PORT = 3187;
 const BASE = `http://127.0.0.1:${PORT}`;
 const SUF = Date.now().toString(36).slice(-6);
 const U = { a: `eA_${SUF}`, b: `eB_${SUF}`, lock: `eLk_${SUF}` };
-const PWD = 'pass123';
+const PWD = 'pass1234';
 const tokens = {};
 const createdUserIds = [];
 let serverProc;
@@ -48,6 +48,8 @@ after(async () => {
       db.prepare('DELETE FROM practice_records WHERE user_id = ?').run(id);
       db.prepare('DELETE FROM favorites WHERE user_id = ?').run(id);
       db.prepare('DELETE FROM notes WHERE user_id = ?').run(id);
+      try { db.prepare('DELETE FROM custom_questions WHERE user_id = ?').run(id); } catch {}
+      try { db.prepare('DELETE FROM custom_batches WHERE user_id = ?').run(id); } catch {}
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
       db.prepare('DELETE FROM users WHERE id = ?').run(id);
     }
@@ -132,6 +134,26 @@ test('一次性邀请码：可用一次，二次失效，假码拒绝', async ()
 
   const r3 = await post('/api/auth/register', { username: `eInv3_${SUF}`, password: PWD, inviteCode: 'NOPE-XXXX-XXXX' });
   assert.equal(r3.ok, false, '假码应失败');
+});
+
+test('自定义题库按用户隔离：A 导入，B 看不到/读不到', async () => {
+  const imp = await post('/api/custom/import', { name: `E2E题库_${SUF}`, subject: '自定义', questions: [{ prompt: '题目1', options: ['A', 'B'], answer_index: 0, answer: 'A' }] }, tokens.a);
+  assert.ok(imp.id, '导入应返回批次 id: ' + JSON.stringify(imp));
+  const la = await get('/api/custom/batches', tokens.a);
+  const lb = await get('/api/custom/batches', tokens.b);
+  assert.ok(la.batches.some((b) => Number(b.id) === Number(imp.id)), 'A 应能看到自己的批次');
+  assert.ok(!lb.batches.some((b) => Number(b.id) === Number(imp.id)), 'B 不应看到 A 的批次');
+  const qb = await get(`/api/custom/questions?batch_id=${imp.id}`, tokens.b);
+  assert.ok(qb.error, 'B 读取 A 的批次应报错');
+});
+
+test('修改密码：成功后旧密码失效', async () => {
+  const r = await post('/api/auth/password', { oldPassword: PWD, newPassword: 'newpass123' }, tokens.a);
+  assert.equal(r.ok, true, '改密应成功: ' + JSON.stringify(r));
+  const oldLogin = await post('/api/auth/login', { username: U.a, password: PWD });
+  assert.equal(oldLogin.ok, false, '旧密码应失效');
+  const newLogin = await post('/api/auth/login', { username: U.a, password: 'newpass123' });
+  assert.equal(newLogin.ok, true, '新密码应可登录');
 });
 
 test('登录限流：5 次失败后锁定', async () => {
