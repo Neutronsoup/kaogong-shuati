@@ -693,8 +693,8 @@ async function renderProfile() {
   if (u) {
     actions.innerHTML = `
       <button class="btn btn-ghost btn-block" id="pf-pass">修改密码</button>
-      <button class="btn btn-ghost btn-block" id="pf-logoutall" style="margin-top:8px">退出所有设备</button>
-      <button class="btn btn-ghost btn-block" id="pf-logout" style="margin-top:8px">退出登录</button>`;
+      <button class="btn btn-ghost btn-block" id="pf-logoutall">退出所有设备</button>
+      <button class="btn btn-ghost btn-block" id="pf-logout">退出登录</button>`;
     view.appendChild(actions);
     $('#pf-pass').onclick = () => openChangePassword();
     $('#pf-logoutall').onclick = async () => {
@@ -5048,7 +5048,7 @@ async function renderNotesTab(view) {
   const card = el('div', 'card', `<h3>${esc(name)}笔记共 ${g.count} 条</h3>
     <div style="margin-top:10px">
       <button class="btn" id="note-random">${ico('play', 15)} 随机练习（从笔记抽 10-15 题）</button>
-      <button class="btn btn-ghost btn-block" id="note-organize" style="margin-top:8px">${ico('folderTree', 15)} 一键整理（自动归类历史未分类笔记）</button>
+      <button class="btn btn-ghost btn-block" id="note-organize">${ico('folderTree', 15)} 一键整理（自动归类历史未分类笔记）</button>
     </div>
     <div class="li-tip">${ico('lightbulb', 13)} 点击子模块查看对应笔记，点击笔记可重做该题，做题/成绩页可随时修改</div>`);
   view.appendChild(card);
@@ -5317,7 +5317,7 @@ async function renderAiSettings() {
       <input class="field" data-f="api_key" type="password" value="${esc(a.api_key)}" placeholder="${a.api_key_masked || '未配置'}">
       <label class="field-label">模型</label>
       <input class="field" data-f="model" value="${esc(a.model)}" placeholder="deepseek-chat">
-      <button class="btn btn-ghost" data-ai-models style="margin-top:8px">${ico('list', 14)} 获取该 URL 的全部模型</button>
+      <button class="btn btn-ghost" data-ai-models>${ico('list', 14)} 获取该 URL 的全部模型</button>
       <div class="ai-models-box" style="display:none;margin-top:8px;font-size:13px"></div>
       <div style="display:flex;gap:10px">
         <div style="flex:1">
