@@ -240,7 +240,7 @@ h1, h2, h3, .hs-num, .stat-card .num { font-family: inherit; font-variant-numeri
 .hero .hero-cta:active { transform: scale(.97); opacity: .85; }
 
 /* ---------- 题库网格（试卷封面卡） ---------- */
-.subject-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.subject-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
 .subject-card {
   position: relative;
   background: var(--card);
