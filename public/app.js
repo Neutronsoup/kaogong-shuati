@@ -83,6 +83,9 @@ const el = (tag, cls, html) => {
   return e;
 };
 
+// 自定义题库模块入口开关（false = 屏蔽入口，数据与后端保留）
+const CUSTOM_BANK_ENABLED = false;
+
 const TOKEN_KEY = 'kg_token';
 function getToken() { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } }
 function setToken(t) { try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch {} }
@@ -833,19 +836,21 @@ async function renderHome() {
 
     // 题库网格（试卷封面卡）
     const grid = el('div', 'subject-grid');
-    // 自定义题库入口卡（2026-08-15：文件导入 → 批次 → 刷题）
-    const customCard = el('div', 'subject-card custom-entry', `
-      <span class="emoji tint-cyan">${fico('database', 30)}</span>
-      <div class="name">自定义题库</div>
-      <div class="desc">导入 PDF / Excel / Word / TXT 题目，自由刷题</div>
-      <div class="stat-line"><span id="custom-batch-count">加载中…</span></div>
-    `);
-    customCard.onclick = () => renderCustomBank();
-    grid.appendChild(customCard);
-    api('/api/custom/batches').then((d) => {
-      const el0 = $('#custom-batch-count');
-      if (el0) el0.innerHTML = d.batches.length ? `<b>${d.batches.length}</b> 个批次 · <b>${d.batches.reduce((s, b) => s + b.count, 0)}</b> 题` : '暂无批次，点击导入';
-    }).catch(() => { const el0 = $('#custom-batch-count'); if (el0) el0.textContent = '点击导入'; });
+    // 自定义题库入口卡（CUSTOM_BANK_ENABLED=false 时屏蔽）
+    if (CUSTOM_BANK_ENABLED) {
+      const customCard = el('div', 'subject-card custom-entry', `
+        <span class="emoji tint-cyan">${fico('database', 30)}</span>
+        <div class="name">自定义题库</div>
+        <div class="desc">导入 PDF / Excel / Word / TXT 题目，自由刷题</div>
+        <div class="stat-line"><span id="custom-batch-count">加载中…</span></div>
+      `);
+      customCard.onclick = () => renderCustomBank();
+      grid.appendChild(customCard);
+      api('/api/custom/batches').then((d) => {
+        const el0 = $('#custom-batch-count');
+        if (el0) el0.innerHTML = d.batches.length ? `<b>${d.batches.length}</b> 个批次 · <b>${d.batches.reduce((s, b) => s + b.count, 0)}</b> 题` : '暂无批次，点击导入';
+      }).catch(() => { const el0 = $('#custom-batch-count'); if (el0) el0.textContent = '点击导入'; });
+    }
     const SUBJECT_TINTS = {
       '公务员·行测': 'tint-orange',
       '公务员·申论': 'tint-green',
@@ -4479,6 +4484,7 @@ let wState = { total: 0, offset: 0, tab: DEFAULT_MODULE_TAB };
 function moduleTabsEl(activeKey, onPick) {
   const tabs = el('div', 'mock-tabs');
   for (const t of MODULE_TABS) {
+    if (!CUSTOM_BANK_ENABLED && t.key === 'custom') continue; // 屏蔽自定义题库 tab
     const btn = el('button', `mock-tab${t.key === activeKey ? ' active' : ''}`, t.name);
     btn.onclick = () => onPick(t.key);
     tabs.appendChild(btn);
@@ -4562,7 +4568,8 @@ async function renderWrong() {
 
 /** 错题本 tab 页：大模块统计卡 + 子模块列表（custom tab 直接列题） */
 async function renderWrongTab(view) {
-  const tab = wState.tab;
+  let tab = wState.tab;
+  if (!CUSTOM_BANK_ENABLED && tab === 'custom') { tab = DEFAULT_MODULE_TAB; wState.tab = tab; }
   view.innerHTML = '';
   view.appendChild(moduleTabsEl(tab, (key) => { wState.tab = key; renderWrongTab(view); }));
   if (tab === 'custom') { await renderWrongList('custom', '', '自定义题库', true); return; }
@@ -4834,7 +4841,8 @@ async function renderFavorites() {
 
 /** 收藏 tab 页：大模块统计卡 + 子模块列表（custom tab 直接列题） */
 async function renderFavTab(view) {
-  const tab = fState.tab;
+  let tab = fState.tab;
+  if (!CUSTOM_BANK_ENABLED && tab === 'custom') { tab = DEFAULT_MODULE_TAB; fState.tab = tab; }
   view.innerHTML = '';
   view.appendChild(moduleTabsEl(tab, (key) => { fState.tab = key; renderFavTab(view); }));
   if (tab === 'custom') { await renderFavList('custom', '', '自定义题库', true); return; }
@@ -5095,7 +5103,8 @@ async function renderNotes() {
 
 /** 笔记 tab 页：大模块统计卡 + 子模块列表（custom tab 直接列题） */
 async function renderNotesTab(view) {
-  const tab = noteState.tab;
+  let tab = noteState.tab;
+  if (!CUSTOM_BANK_ENABLED && tab === 'custom') { tab = DEFAULT_MODULE_TAB; noteState.tab = tab; }
   view.innerHTML = '';
   view.appendChild(moduleTabsEl(tab, (key) => { noteState.tab = key; renderNotesTab(view); }));
   if (tab === 'custom') { await renderNotesList('custom', '', '自定义题库', true); return; }
