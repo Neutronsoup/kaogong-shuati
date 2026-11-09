@@ -1,6 +1,6 @@
 {
     "name": "kaogong-quiz",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "private": true,
     "type": "module",
     "description": "考公刷题全栈应用（零依赖 Node 后端 + Web/Android + AI 解析）",
