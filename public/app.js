@@ -278,29 +278,41 @@ function fmtTime(sec) {
 function startTimer(limitSec) {
   const s = store.state;
   if (s.timing && s.timing.timerId) clearInterval(s.timing.timerId);
-  // limitSec > 0 → 考试倒计时模式（组卷）：剩余时间递减，到 0 自动交卷；否则为正计时（普通练习）
-  s.timing = { elapsed: 0, running: true, timerId: null, limit: limitSec > 0 ? limitSec : null, remaining: limitSec > 0 ? limitSec : 0 };
+  // 以真实时间（Date.now）计时：setInterval 只负责刷新界面，
+  // 页面被冻结/切后台/系统休眠后恢复时能自动补齐真实时间，不会"卡住不走"。
+  s.timing = {
+    running: true,
+    accumulatedMs: 0,      // 之前已累计的毫秒（暂停前）
+    startedAt: Date.now(), // 本段开始时间
+    timerId: null,
+    limit: limitSec > 0 ? limitSec : null, // 秒；null=正计时
+    elapsed: 0,            // 秒
+    remaining: limitSec > 0 ? limitSec : 0,
+  };
   const tick = () => {
     const t = s.timing;
-    if (!t || !t.running) return;
-    t.elapsed++;
-    if (t.limit) {
-      t.remaining--;
-      if (t.remaining <= 0) {
-        t.remaining = 0;
-        t.running = false;
-        clearInterval(t.timerId);
-        t.timerId = null;
-        renderTimerText();
-        toast('考试时间到，已自动交卷');
-        submitExam(true);
-        return;
-      }
-    }
+    if (!t || !t.running) return; // 暂停期间时间固定
+    updateTiming(t);
     renderTimerText();
+    if (t.limit && t.remaining <= 0) {
+      t.running = false;
+      if (t.timerId) clearInterval(t.timerId);
+      t.timerId = null;
+      renderTimerText();
+      toast('考试时间到，已自动交卷');
+      submitExam(true);
+    }
   };
-  s.timing.timerId = setInterval(tick, 1000);
+  s.timing.timerId = setInterval(tick, 500);
+  updateTiming(s.timing);
   renderTimerText();
+}
+/** 按真实时间刷新 elapsed / remaining（暂停时用 accumulatedMs，运行中用 now-startedAt） */
+function updateTiming(t) {
+  if (!t) return;
+  const ms = (t.accumulatedMs || 0) + (t.running ? (Date.now() - t.startedAt) : 0);
+  t.elapsed = Math.floor(ms / 1000);
+  if (t.limit) t.remaining = Math.max(0, t.limit - t.elapsed);
 }
 /** 计时条文本：倒计时模式显示剩余时间，正计时模式显示已用时间 */
 function renderTimerText() {
@@ -312,9 +324,19 @@ function renderTimerText() {
 function pauseToggle() {
   const s = store.state;
   if (!s.timing) return;
-  s.timing.running = !s.timing.running;
+  const t = s.timing;
+  updateTiming(t);
+  if (t.running) {
+    // 暂停：把已用的真实时间固定下来
+    t.accumulatedMs = t.elapsed * 1000;
+    t.running = false;
+  } else {
+    // 继续：从此刻重新开始累计
+    t.startedAt = Date.now();
+    t.running = true;
+  }
   const btn = $('#btn-pause');
-  if (btn) btn.innerHTML = s.timing.running ? ico('pause', 14) : ico('play', 14);
+  if (btn) btn.innerHTML = t.running ? ico('pause', 14) : ico('play', 14);
   renderTimerText();
 }
 /** 是否处于暂停状态（暂停期间题目完全冻结：不能作答/排除/翻题/看解析/交卷） */
@@ -353,9 +375,23 @@ function confirmPendingMulti() {
   const j = judge(q, a.selected);
   a.correct = j.valid ? j.ok : null;
 }
+// 页面重新可见（切回标签页/App 回前台）时立即校正计时，避免休眠/后台丢时间
+document.addEventListener('visibilitychange', () => {
+  const t = store.state.timing;
+  if (!t) return;
+  if (!document.hidden) {
+    if (t.running) updateTiming(t);
+    renderTimerText();
+  }
+});
+
 function stopTimer() {
   const s = store.state;
   if (s.timing && s.timing.timerId) clearInterval(s.timing.timerId);
+  if (s.timing) {
+    if (s.timing.running) updateTiming(s.timing); // 定格当前真实用时
+    s.timing.timerId = null;
+  }
 }
 /** 累计当前题用时 */
 function stampCost(idx) {
@@ -437,6 +473,8 @@ function saveWrong() {
 
 // ---------- 视图切换 ----------
 function setView(name) {
+  // 离开做题视图时停表，避免倒计时在后台/其他页面继续跑或误自动交卷
+  if (name !== 'practice' && store.state.timing && store.state.timing.timerId) stopTimer();
   cropSession++;          // 任何页面切换：使未完成的裁剪会话失效
   closeCropEditor();      // 清理可能残留的裁剪器 overlay
   store.state.view = name;
