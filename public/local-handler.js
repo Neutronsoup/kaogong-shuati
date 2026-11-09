@@ -45,7 +45,27 @@ function groupCustomPracticeRows(rows, mapper) {
   return out;
 }
 
-export function createLocalHandler({ query, records, store, ai }) {
+// 方案B：这些「记录类」路由在服务器可用时优先走服务器（与网页版共享同一份 practice.db）；
+// 服务器不可达时自动回退到本地 IndexedDB 实现（保证离线可用）。
+const REMOTE_ROUTES = new Set([
+  'POST /records',
+  'GET /records/stats',
+  'GET /records/recent',
+  'GET /records/wrong',
+  'DELETE /records/wrong',
+  'GET /records/wrong/groups',
+  'GET /favorites',
+  'POST /favorites',
+  'DELETE /favorites',
+  'GET /favorites/groups',
+  'GET /notes',
+  'POST /notes',
+  'DELETE /notes',
+  'GET /notes/groups',
+  'POST /organize',
+]);
+
+export function createLocalHandler({ query, records, store, ai, remote }) {
   /** 聚合统计（与 server /api/records/stats 同构：total/correct/wrong/rate/byChapter/last7/daily） */
   async function statsWithParams({ subject, days, from, to } = {}) {
     let rows = await store.getAll('records');
@@ -121,6 +141,16 @@ export function createLocalHandler({ query, records, store, ai }) {
 
     const rest = seg.slice(1).join('/'); // 'subjects' | 'ai/agents/3/test'
     const route = `${method} /${rest}`;
+
+    // ---------- 记录/收藏/笔记：服务器代理（方案B，共享做题记录；不可达则回退本地） ----------
+    if (remote && REMOTE_ROUTES.has(route)) {
+      try {
+        return await remote(path, method, body);
+      } catch (e) {
+        console.warn('[sync] 服务器不可达，回退本地存储：', e && e.message);
+        // 落到下方本地实现分支
+      }
+    }
 
     // ---------- 题库查询 ----------
     if (route === 'GET /subjects') return query.subjects();

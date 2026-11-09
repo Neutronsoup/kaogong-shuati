@@ -114,9 +114,46 @@ if (isLocalMode()) {
     }
     const ai = await createAiApi({ request: request, tiku: tiku, query: api.query });
 
-    // ---------- 4. 本地 API 路由 ----------
+    // ---------- 4. 本地 API 路由（方案B：题库本地，记录/错题/收藏/笔记走服务器共享） ----------
     const { createLocalHandler } = await import('./local-handler.js');
-    const handler = createLocalHandler({ query: api.query, records: api.records, store: api.store, ai: ai });
+    // 服务器地址：server-config.js 默认值，可被 localStorage['kaogong_server'] 覆盖
+    const serverBase = String(window.KAOGONG_SERVER || (typeof localStorage !== 'undefined' && localStorage.getItem('kaogong_server')) || '').replace(/\/+$/, '');
+    let remoteFetch = null;
+    let serverState = 'off';
+    // Basic 认证头（公网 HTTPS 反向代理启用了 basic_auth；App 每次请求自动携带）
+    const authCfg = window.KAOGONG_AUTH || null;
+    let authHeader = null;
+    if (authCfg && authCfg.username != null) {
+      try { authHeader = 'Basic ' + btoa(authCfg.username + ':' + (authCfg.password || '')); } catch (e) { authHeader = null; }
+    }
+    const authHeaders = authHeader ? { Authorization: authHeader } : {};
+    if (serverBase) {
+      setBootProgress(88);
+      try {
+        const pr = await request(serverBase + '/api/subjects', { method: 'GET', headers: authHeaders });
+        if (pr && pr.ok) {
+          serverState = 'online';
+          remoteFetch = async function (path, method, reqBody) {
+            const r = await request(serverBase + path, {
+              method: method,
+              headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders),
+              body: reqBody === undefined ? undefined : JSON.stringify(reqBody),
+            });
+            if (!r || !r.ok) throw new Error('HTTP ' + (r && r.status));
+            try { return await r.json(); } catch (e) { return null; }
+          };
+        } else {
+          serverState = 'unreachable';
+        }
+      } catch (e) {
+        serverState = 'unreachable';
+        console.warn('[sync] 服务器探测失败，本次退回纯离线：', e && e.message);
+      }
+    }
+    window.__SERVER_BASE__ = serverBase;
+    window.__SERVER_STATE__ = serverState;
+    console.log('[sync] 服务器模式：' + serverState + (serverBase ? ' (' + serverBase + ')' : ''));
+    const handler = createLocalHandler({ query: api.query, records: api.records, store: api.store, ai: ai, remote: remoteFetch });
     // 调试/测试用：暴露记录存储（IndexedDB 适配器）
     window.__LOCAL_STORE__ = api.store;
 
