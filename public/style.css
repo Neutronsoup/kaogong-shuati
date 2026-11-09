@@ -1202,3 +1202,94 @@ textarea.field { resize: vertical; line-height: 1.6; }
   border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; margin-top: 6px;
   white-space: pre-wrap; word-break: break-all; max-height: 76px; overflow: hidden;
 }
+
+/* ============================================================
+   登录 / 个人中心（2026-11 新增）
+   ============================================================ */
+/* 顶栏右侧容纳「个人中心 + 主题」两个按钮（原固定 36px 只放得下一个） */
+#topbar-right { width: auto; gap: 2px; }
+
+/* ---------- 全屏登录页 ---------- */
+#login-screen {
+  position: fixed; inset: 0; z-index: 9000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 22px; padding: 28px 20px calc(28px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg); overflow-y: auto;
+}
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.login-logo { display: flex; }
+.login-title { font-size: 23px; font-weight: 800; color: var(--text); letter-spacing: .5px; }
+.login-sub { font-size: 12.5px; color: var(--text-2); letter-spacing: 2px; }
+.login-card {
+  width: 100%; max-width: 360px; background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px 18px 16px; display: flex; flex-direction: column; gap: 12px;
+}
+.login-tabs {
+  display: flex; background: var(--bg-soft); border-radius: 10px; padding: 3px; margin-bottom: 4px;
+}
+.login-tab {
+  flex: 1; border: 0; background: transparent; color: var(--text-2);
+  font-size: 14px; font-weight: 600; padding: 8px 0; border-radius: 8px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.login-tab.active { background: var(--card); color: var(--text); box-shadow: var(--shadow-sm); }
+.login-field { display: flex; flex-direction: column; gap: 6px; }
+.login-field > span { font-size: 12px; color: var(--text-2); font-weight: 600; }
+.login-field > input {
+  width: 100%; padding: 11px 13px; font-size: 15px; color: var(--text);
+  background: var(--card-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  outline: none; -webkit-appearance: none;
+}
+.login-field > input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.login-error { min-height: 16px; font-size: 12.5px; color: var(--red); line-height: 1.4; }
+.login-card .btn-block { margin-top: 2px; }
+.login-guest {
+  border: 0; background: transparent; color: var(--primary); font-size: 13.5px;
+  padding: 6px 0 2px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.login-guest:active { opacity: .6; }
+.login-foot { font-size: 11.5px; color: var(--text-3); text-align: center; }
+
+/* ---------- 个人中心 ---------- */
+.profile-head { display: flex; align-items: center; gap: 14px; }
+.profile-avatar {
+  width: 54px; height: 54px; border-radius: 50%; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; font-weight: 800; color: #fff; background: var(--primary-fill);
+}
+.profile-avatar.guest { background: var(--bg-soft); color: var(--text-3); }
+.profile-id { min-width: 0; }
+.profile-name { font-size: 18px; font-weight: 800; color: var(--text); }
+.profile-role { font-size: 12.5px; color: var(--text-2); margin-top: 3px; }
+.profile-stats {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 8px; text-align: center;
+}
+.profile-stats .ps-num { font-size: 22px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.profile-stats .ps-label { font-size: 11.5px; color: var(--text-2); margin-top: 3px; }
+.profile-actions { padding: 0; background: transparent; border: 0; }
+.profile-actions .btn { min-height: 46px; }
+
+/* ---------- admin 账号列表 ---------- */
+.adm-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 0; border-top: 1px solid var(--border);
+}
+.adm-row:first-child { border-top: 0; }
+.adm-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.adm-info b { font-size: 14px; color: var(--text); }
+.adm-tag {
+  font-size: 10.5px; padding: 1px 7px; border-radius: 6px;
+  background: var(--bg-soft); color: var(--text-2); font-weight: 600;
+}
+.adm-tag.admin { background: var(--primary-soft); color: var(--primary); }
+.adm-status { font-size: 11.5px; font-weight: 600; }
+.adm-status.ok { color: var(--green); }
+.adm-status.no { color: var(--red); }
+
+/* 移动端适配 */
+@media (max-width: 380px) {
+  .login-card { padding: 16px 14px 12px; }
+  .login-title { font-size: 21px; }
+}

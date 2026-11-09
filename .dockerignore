@@ -1,0 +1,39 @@
+# 构建上下文瘦身：只保留运行时需要的文件（其余不发送给 Docker daemon）
+.git
+.gitignore
+node_modules
+app
+app-assets
+docs
+icon-preview
+ref-skills
+skills
+tools
+*.apk
+*.ico
+*.log
+
+# 本地数据/缓存（运行时生成，勿入镜像）
+practice.db
+practice.db-*
+practice.db.bak*
+ai-config.db
+ai-config.db-shm
+ai-config.db-wal
+tiku.db-shm
+tiku.db-wal
+tiku.db.part-*
+
+# 开发/测试脚本与文档
+test-*.mjs
+e2e-auth.mjs
+diag-*.mjs
+build-*.mjs
+make-*.mjs
+make-icons*.mjs
+check-*.mjs
+backfill-*.mjs
+watchdog.mjs
+*.md
+Dockerfile
+.dockerignore

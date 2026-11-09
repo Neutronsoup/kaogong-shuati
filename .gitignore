@@ -133,3 +133,6 @@ ai-key-security.md
 # ===== App 记录同步服务器配置（含 Basic 认证口令，仅本地保留）=====
 public/server-config.js
 !public/server-config.example.js
+
+# 注册邀请码（仅服务器本地）
+invite.txt

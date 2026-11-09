@@ -134,9 +134,13 @@ if (isLocalMode()) {
         if (pr && pr.ok) {
           serverState = 'online';
           remoteFetch = async function (path, method, reqBody) {
+            // 每次请求动态读取当前登录 token（App 端账号体系），用 X-Auth-Token 传递
+            const tk = (typeof localStorage !== 'undefined' && localStorage.getItem('kg_token')) || '';
+            const hdrs = Object.assign({ 'Content-Type': 'application/json' }, authHeaders);
+            if (tk) hdrs['X-Auth-Token'] = tk;
             const r = await request(serverBase + path, {
               method: method,
-              headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders),
+              headers: hdrs,
               body: reqBody === undefined ? undefined : JSON.stringify(reqBody),
             });
             if (!r || !r.ok) throw new Error('HTTP ' + (r && r.status));
@@ -152,6 +156,7 @@ if (isLocalMode()) {
     }
     window.__SERVER_BASE__ = serverBase;
     window.__SERVER_STATE__ = serverState;
+    window.__SERVER_AUTH_HEADERS__ = authHeaders; // Basic 认证头（反向代理），供 app.js 认证请求复用
     console.log('[sync] 服务器模式：' + serverState + (serverBase ? ' (' + serverBase + ')' : ''));
     const handler = createLocalHandler({ query: api.query, records: api.records, store: api.store, ai: ai, remote: remoteFetch });
     // 调试/测试用：暴露记录存储（IndexedDB 适配器）
