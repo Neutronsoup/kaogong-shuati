@@ -48,7 +48,7 @@ try {
       auth.createInvite(code, note, expiresAt);
       out.push(code);
     }
-    console.log(`✓ 已生成 ${n} 个一次性邀请码${note ? `（备注：${note}）` : ''}${expiresAt ? `，过期：${expiresAt}` : ''}：`);
+    console.log(`✓ 已生成 ${n} 个一次性邀请码${note ? `（备注：${note}）` : ''}${expiresAt ? `，过期：${expiresAt}` : '，未使用前永久有效'}：`);
     for (const c of out) console.log('  ' + c);
   } else if (cmd === 'list') {
     const rows = auth.listInvites();
