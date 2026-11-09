@@ -351,6 +351,18 @@ function pauseToggle() {
   if (btn) btn.innerHTML = t.running ? ico('pause', 14) : ico('play', 14);
   renderTimerText();
 }
+/** 正计时归零：把已用时间清零、从当前时刻重新计时（考试/倒计时不可用） */
+function resetTimer() {
+  const s = store.state;
+  if (!s.timing || s.exam || s.timing.limit) return;
+  const t = s.timing;
+  t.accumulatedMs = 0;
+  t.elapsed = 0;
+  if (t.running) t.startedAt = Date.now();
+  renderTimerText();
+  toast('计时已归零');
+}
+
 /** 是否处于暂停状态（暂停期间题目完全冻结：不能作答/排除/翻题/看解析/交卷） */
 function paused() {
   const t = store.state.timing;
@@ -3182,10 +3194,11 @@ function renderQuestion() {
     view.appendChild(el('div', 'timer-bar', `
       <span class="timer-ico">${s.timing?.limit ? ico('hourglass', 15) : ico('clock', 15)}</span>
       <span id="timer-text">${s.timing?.limit ? fmtTime(s.timing.remaining) : fmtTime(s.timing?.elapsed ?? 0)}</span>
-      ${s.exam ? '' : `<button class="btn btn-ghost btn-sm" id="btn-pause" title="${s.timing?.running === false ? '继续' : '暂停'}">${s.timing?.running === false ? ico('play', 14) : ico('pause', 14)}</button>`}
+      ${s.exam ? '' : `<button class="btn btn-ghost btn-sm" id="btn-pause" title="${s.timing?.running === false ? '继续' : '暂停'}">${s.timing?.running === false ? ico('play', 14) : ico('pause', 14)}</button>${(!s.timing?.limit) ? `<button class="btn btn-ghost btn-sm" id="btn-timer-reset" title="计时归零并重新开始">${ico('refresh', 14)} 归零</button>` : ''}`}
       <span class="timer-tip">${s.exam ? '考试计时（以服务端截止时间为准）' : (s.backMode ? '背题模式：点选即看答案，不自动跳题' : (s.timing?.limit ? '倒计时结束自动交卷' : '交卷后查看解析与成绩'))}</span>
     `));
     if ($('#btn-pause')) $('#btn-pause').onclick = pauseToggle;
+    if ($('#btn-timer-reset')) $('#btn-timer-reset').onclick = resetTimer;
   }
   // 答题进度条
   view.appendChild(el('div', 'q-progress-bar', `<div class="fill" style="width:${total ? Math.round(((s.idx) / total) * 100) : 0}%"></div>`));
