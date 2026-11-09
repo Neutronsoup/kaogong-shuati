@@ -1,5 +1,5 @@
 // 裁剪器纯逻辑单元测试（node test-crop-math.mjs）
-await import('./public/crop-math.js'); // ESM 环境下以副作用挂到 globalThis
+await import('../public/crop-math.js'); // ESM 环境下以副作用挂到 globalThis
 const M = globalThis.CropMath;
 const { clampV, resizeRect, moveRect, calcCropOutput, OCR_MAX_W } = M;
 

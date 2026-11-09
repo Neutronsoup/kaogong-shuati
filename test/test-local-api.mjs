@@ -1,9 +1,12 @@
 ﻿// test-local-api.mjs — 阶段 2 验证：public/local-api.js 数据层（查询面 + 记录面 + 图片层）
 import { DatabaseSync } from 'node:sqlite';
-import { initLocalApi, aggregateStats } from './public/local-api.js';
+import { initLocalApi, aggregateStats } from '../public/local-api.js';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const db = new DatabaseSync('app-assets/tiku_app.db', { readOnly: true });
-const imgDb = new DatabaseSync('app-assets/images.db', { readOnly: true });
+const db = new DatabaseSync(path.join(ROOT, 'app-assets', 'tiku_app.db'), { readOnly: true });
+const imgDb = new DatabaseSync(path.join(ROOT, 'app-assets', 'images.db'), { readOnly: true });
 const engine = { get: (s, ...p) => db.prepare(s).get(...p), all: (s, ...p) => db.prepare(s).all(...p) };
 const imgEngine = { get: (s, ...p) => imgDb.prepare(s).get(...p) };
 

@@ -1,9 +1,12 @@
 // test-local-queries.mjs — 阶段 2 验证：local-queries 在精简库上跑通 + 与 server 响应对照
 // 用法：node test-local-queries.mjs [--with-server]
 import { DatabaseSync } from 'node:sqlite';
-import { createLocalApi, checkAnswer, toQuestion } from './lib/local-queries.mjs';
+import { createLocalApi, checkAnswer, toQuestion } from '../lib/local-queries.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const TIKU = 'app-assets/tiku_app.db';
+const TIKU = path.join(ROOT, 'app-assets', 'tiku_app.db');
 const db = new DatabaseSync(TIKU, { readOnly: true });
 const engine = {
   get: (sql, ...p) => db.prepare(sql).get(...p),
@@ -102,7 +105,7 @@ ok('checkAnswer 空选不崩', typeof r1.ok === 'boolean');
 if (process.argv.includes('--with-server')) {
   const { spawn } = await import('node:child_process');
   const { once } = await import('node:events');
-  const srv = spawn(process.execPath, ['server.mjs', '3199'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const srv = spawn(process.execPath, [path.join(ROOT, 'server.mjs'), '3199'], { stdio: ['ignore', 'pipe', 'pipe'] });
   await new Promise((res) => {
     srv.stdout.on('data', (d) => { if (String(d).includes('http')) res(); });
     setTimeout(res, 2500);

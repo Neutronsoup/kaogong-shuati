@@ -6,7 +6,10 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
-import { createLocalApi } from './lib/local-queries.mjs';
+import { createLocalApi } from '../lib/local-queries.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const PORT = 3900 + Math.floor(Math.random() * 200);
 let server, base;
@@ -17,7 +20,7 @@ before(async () => {
     srv.listen(PORT, () => { srv.close(resolve); });
     srv.on('error', reject);
   });
-  server = spawn(process.execPath, ['server.mjs', String(PORT)], { stdio: 'ignore' });
+  server = spawn(process.execPath, [path.join(ROOT, 'server.mjs'), String(PORT)], { stdio: 'ignore' });
   // 轮询等待服务就绪（替代固定 sleep，避免并发跑多个 server 时启动慢导致误报）
   const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
@@ -78,7 +81,7 @@ test('前端真实参数（mock=0）下数量规则仍生效', () => assertRange
 
 // ===== App 离线模式（lib/local-queries.mjs，与 server 同构实现）=====
 test('离线·行测言语理解与表达（材料模块）15-20 题', () => {
-  const db = new DatabaseSync('app-assets/tiku_app.db', { readOnly: true });
+  const db = new DatabaseSync(path.join(ROOT, 'app-assets', 'tiku_app.db'), { readOnly: true });
   const engine = { get: (sql, ...p) => db.prepare(sql).get(...p), all: (sql, ...p) => db.prepare(sql).all(...p) };
   const api = createLocalApi(engine, engine, {});
   for (let i = 0; i < runs; i++) {
@@ -88,7 +91,7 @@ test('离线·行测言语理解与表达（材料模块）15-20 题', () => {
   db.close();
 });
 test('离线·行测判断推理/资料分析（材料模块）15-20 题', () => {
-  const db = new DatabaseSync('app-assets/tiku_app.db', { readOnly: true });
+  const db = new DatabaseSync(path.join(ROOT, 'app-assets', 'tiku_app.db'), { readOnly: true });
   const engine = { get: (sql, ...p) => db.prepare(sql).get(...p), all: (sql, ...p) => db.prepare(sql).all(...p) };
   const api = createLocalApi(engine, engine, {});
   for (const group of ['判断推理', '资料分析']) {
@@ -100,7 +103,7 @@ test('离线·行测判断推理/资料分析（材料模块）15-20 题', () =>
   db.close();
 });
 test('离线·行测数量关系/常识判断（非材料模块）固定 15 题', () => {
-  const db = new DatabaseSync('app-assets/tiku_app.db', { readOnly: true });
+  const db = new DatabaseSync(path.join(ROOT, 'app-assets', 'tiku_app.db'), { readOnly: true });
   const engine = { get: (sql, ...p) => db.prepare(sql).get(...p), all: (sql, ...p) => db.prepare(sql).all(...p) };
   const api = createLocalApi(engine, engine, {});
   for (const group of ['数量关系', '常识判断']) {
@@ -112,7 +115,7 @@ test('离线·行测数量关系/常识判断（非材料模块）固定 15 题'
   db.close();
 });
 test('离线·申论/综应固定 2 题', () => {
-  const db = new DatabaseSync('app-assets/tiku_app.db', { readOnly: true });
+  const db = new DatabaseSync(path.join(ROOT, 'app-assets', 'tiku_app.db'), { readOnly: true });
   const engine = { get: (sql, ...p) => db.prepare(sql).get(...p), all: (sql, ...p) => db.prepare(sql).all(...p) };
   const api = createLocalApi(engine, engine, {});
   for (let i = 0; i < runs; i++) {

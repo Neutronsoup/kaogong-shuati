@@ -10,6 +10,9 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const PORT = 4800 + Math.floor(Math.random() * 200);
 let server, base;
@@ -21,7 +24,7 @@ before(async () => {
     srv.listen(PORT, () => { srv.close(resolve); });
     srv.on('error', reject);
   });
-  server = spawn(process.execPath, ['server.mjs', String(PORT)], { stdio: 'ignore' });
+  server = spawn(process.execPath, [path.join(ROOT, 'server.mjs'), String(PORT)], { stdio: 'ignore' });
   const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
     try { const r = await fetch(`http://localhost:${PORT}/`); if (r.ok) break; } catch {}
@@ -153,7 +156,7 @@ const noopQuery = { practice: () => [], generatePaper: () => ({ ok: false }), qu
 const noopAi = {};
 
 test('本地 handler：分组出题同构（共用材料 + 小问标记 + 连续）', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const store = memStore();
   const handler = createLocalHandler({ query: noopQuery, records: noopRecords, store, ai: noopAi });
   const bid = await handler('/api/custom/import', {
@@ -186,7 +189,7 @@ test('本地 handler：分组出题同构（共用材料 + 小问标记 + 连续
 });
 
 test('本地 handler：导入带 material_id 保留', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const store = memStore();
   const handler = createLocalHandler({ query: noopQuery, records: noopRecords, store, ai: noopAi });
   const bid = await handler('/api/custom/import', {
@@ -257,7 +260,7 @@ test('按材料内容自动分组：空材料不参与；单题不分组', async
 });
 
 test('本地 handler：自动按材料内容分组同构', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const store = memStore();
   const handler = createLocalHandler({ query: noopQuery, records: noopRecords, store, ai: noopAi });
   const bid = await handler('/api/custom/import', {
@@ -303,7 +306,7 @@ test('出题 count 参数：限制题数；保护材料组完整（不切中间�
 });
 
 test('本地 handler：出题 count 参数同构（材料组保护）', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const store = memStore();
   const handler = createLocalHandler({ query: noopQuery, records: noopRecords, store, ai: noopAi });
   const bid = await handler('/api/custom/import', {

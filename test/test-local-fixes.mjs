@@ -9,8 +9,8 @@ process.env.TZ = 'Asia/Shanghai';
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { createRecordsApi, aggregateStats } from './public/local-api.js';
-import { createLocalHandler } from './public/local-handler.js';
+import { createRecordsApi, aggregateStats } from '../public/local-api.js';
+import { createLocalHandler } from '../public/local-handler.js';
 
 // ---------- mock 存储 ----------
 function mockStore() {

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(__dirname, '..');
 
 // ---------- mock 浏览器环境 ----------
 const storage = new Map();
@@ -17,7 +18,7 @@ global.localStorage = {
   removeItem: (k) => storage.delete(k),
 };
 const fetchLog = [];
-const defaultAgents = JSON.parse(readFileSync(path.join(__dirname, 'public/ai-agents.default.json'), 'utf8'));
+const defaultAgents = JSON.parse(readFileSync(path.join(ROOT, 'public/ai-agents.default.json'), 'utf8'));
 global.fetch = async (url) => {
   fetchLog.push(String(url));
   const u = String(url);
@@ -25,16 +26,16 @@ global.fetch = async (url) => {
     return { ok: true, status: 200, json: async () => defaultAgents };
   }
   if (u.includes('skill-gongkao-huasheng13.json')) {
-    return { ok: true, status: 200, json: async () => JSON.parse(readFileSync(path.join(__dirname, 'public/app-assets/skill-gongkao-huasheng13.json'), 'utf8')) };
+    return { ok: true, status: 200, json: async () => JSON.parse(readFileSync(path.join(ROOT, 'public/app-assets/skill-gongkao-huasheng13.json'), 'utf8')) };
   }
   if (u.includes('skill-shenlun-master.json')) {
-    return { ok: true, status: 200, json: async () => JSON.parse(readFileSync(path.join(__dirname, 'public/app-assets/skill-shenlun-master.json'), 'utf8')) };
+    return { ok: true, status: 200, json: async () => JSON.parse(readFileSync(path.join(ROOT, 'public/app-assets/skill-shenlun-master.json'), 'utf8')) };
   }
   return { ok: false, status: 404, json: async () => ({}) };
 };
 
 // ---------- 题库引擎（node:sqlite 适配 sql.js 接口 {get, all}） ----------
-const db = new DatabaseSync(path.join(__dirname, 'app-assets/tiku_app.db'), { readOnly: true });
+const db = new DatabaseSync(path.join(ROOT, 'app-assets/tiku_app.db'), { readOnly: true });
 const tiku = {
   get: (sql, ...args) => db.prepare(sql).get(...args),
   all: (sql, ...args) => db.prepare(sql).all(...args),
@@ -53,7 +54,7 @@ function makeRequest(responder) {
 
 // ---------- 测试 ----------
 test('本地 AI：默认智能体列表', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   const list = await ai.agents();
   assert.ok(Array.isArray(list) && list.length >= 4, `应有 ≥4 个智能体，实际 ${list.length}`);
@@ -63,7 +64,7 @@ test('本地 AI：默认智能体列表', async () => {
 });
 
 test('本地 AI：默认配置自动注入技能包（行测→gongkao-huasheng13、申论→shenlun-master）', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   const list = await ai.agents();
   const xc = list.find((a) => a.id === 1);   // 行测解析 AI
@@ -77,7 +78,7 @@ test('本地 AI：默认配置自动注入技能包（行测→gongkao-huasheng1
 });
 
 test('本地 AI：更改 prompt 立即生效（同实例读回）', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   const r = await ai.updateAgent(1, { system_prompt: 'NEW_PROMPT_测试' });
   assert.equal(r.promptChanged, true, 'prompt 变更应标记 promptChanged');
@@ -86,21 +87,21 @@ test('本地 AI：更改 prompt 立即生效（同实例读回）', async () => 
 });
 
 test('本地 AI：更改 prompt 跨实例持久化（localStorage）', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null }); // 新实例
   const a = await ai.getAgent(1);
   assert.equal(a.system_prompt, 'NEW_PROMPT_测试', '新实例读回旧实例保存的 prompt');
 });
 
 test('本地 AI：prompt 未变更时 promptChanged=false', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   const r = await ai.updateAgent(1, { system_prompt: 'NEW_PROMPT_测试' }); // 相同值
   assert.equal(r.promptChanged, false, '相同 prompt 不应触发缓存清理');
 });
 
 test('本地 AI：更改 skill 为技能包名 → 注入完整技能包', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   const r = await ai.updateAgent(1, { skill: 'shenlun-master' }); // 默认已是 gongkao-huasheng13 → 改成另一个技能包
   assert.equal(r.promptChanged, true, 'skill 变更应标记 promptChanged');
@@ -114,7 +115,7 @@ test('本地 AI：更改 skill 为技能包名 → 注入完整技能包', async
 });
 
 test('本地 AI：skill 注入内容进入 AI 请求 system 消息', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   await ai.updateAgent(1, { skill: 'gongkao-huasheng13', api_key: 'sk-test-123', enabled: 1 }); // 显式设技能包 + 启用
   const r = await ai.explain({ questionId: qid, selected: 'A' });
@@ -127,7 +128,7 @@ test('本地 AI：skill 注入内容进入 AI 请求 system 消息', async () =>
 });
 
 test('本地 AI：api_key 空值/脱敏占位不覆盖旧值', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   // getAgent 恒脱敏（api_key: '' + api_key_masked），持久化 key 用 updateAgent 返回值验证
   const r1 = await ai.updateAgent(2, { api_key: 'sk-real-789' });
@@ -145,7 +146,7 @@ test('本地 AI：api_key 空值/脱敏占位不覆盖旧值', async () => {
 });
 
 test('本地 AI：未配置 key → 可读降级提示', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   // agent 1 已在上个测试启用且带 key——用未配置的 agent 4（image-reader，无 key）
   const r = await ai.ocr({ image: 'data:image/png;base64,xxx', subject: '公务员·行测' });
@@ -153,14 +154,14 @@ test('本地 AI：未配置 key → 可读降级提示', async () => {
 });
 
 test('本地 AI：explain 对不存在题目返回可读错误', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   const r = await ai.explain({ questionId: 999999999, selected: 'A' });
   assert.ok(r.error && r.error.includes('未找到'), `应提示未找到题目：${r.error}`);
 });
 
 test('本地 AI：request 失败（断网）→ 可读错误', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({
     request: async () => { throw new Error('network down'); },
     tiku, query: null,
@@ -171,7 +172,7 @@ test('本地 AI：request 失败（断网）→ 可读错误', async () => {
 });
 
 test('本地 AI：ocr 统一走合并后的识图转写员（image-reader）', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const calls = [];
   const ai = await createAiApi({
     request: async (url, opts) => { calls.push(JSON.parse(opts.body).model); return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'OK' } }] }), text: async () => '' }; },
@@ -191,14 +192,14 @@ test('本地 AI：ocr 统一走合并后的识图转写员（image-reader）', a
 });
 
 test('本地 AI：clearExplainCache 不抛错（返回 {cleared}）', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: makeRequest(), tiku, query: null });
   const r = await ai.clearExplainCache();
   assert.equal(typeof r.cleared, 'number', 'cleared 应为数字');
 });
 
 test('本地 AI：material 返回 {text}（与 app.js 期望一致）', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const pid = tiku.get('SELECT paperId FROM questions WHERE paperId IS NOT NULL LIMIT 1').paperId;
   const ai = await createAiApi({
     request: makeRequest(), tiku, query: {
@@ -211,7 +212,7 @@ test('本地 AI：material 返回 {text}（与 app.js 期望一致）', async ()
 });
 
 test('本地 AI：无材料卷 → notice 提示', async () => {
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({
     request: makeRequest(), tiku, query: { paperMaterials: () => [] },
   });

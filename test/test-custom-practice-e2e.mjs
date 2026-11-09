@@ -7,6 +7,9 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { chromium } from 'playwright-core';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const PORT = 4500 + Math.floor(Math.random() * 200);
 let server, browser, page;
@@ -17,7 +20,7 @@ before(async () => {
     srv.listen(PORT, () => { srv.close(resolve); });
     srv.on('error', reject);
   });
-  server = spawn(process.execPath, ['server.mjs', String(PORT)], { stdio: 'ignore' });
+  server = spawn(process.execPath, [path.join(ROOT, 'server.mjs'), String(PORT)], { stdio: 'ignore' });
   const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
     try { const r = await fetch(`http://localhost:${PORT}/`); if (r.ok) break; } catch {}

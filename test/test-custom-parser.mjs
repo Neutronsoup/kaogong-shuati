@@ -12,7 +12,7 @@ import {
   customImagesHtml,
   customQuestionHtml,
   computeFigureCrops,
-} from './public/lib/custom-parser.js';
+} from '../public/lib/custom-parser.js';
 
 test('normalizeAnswer：单选 A-D 映射 answer_index', () => {
   const r = normalizeAnswer('B', ['A. 甲', 'B. 乙', 'C. 丙', 'D. 丁']);

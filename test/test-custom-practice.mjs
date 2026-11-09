@@ -8,7 +8,10 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
-import { createLocalApi } from './lib/local-queries.mjs';
+import { createLocalApi } from '../lib/local-queries.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const PORT = 4200 + Math.floor(Math.random() * 200);
 let server, base;
@@ -19,7 +22,7 @@ before(async () => {
     srv.listen(PORT, () => { srv.close(resolve); });
     srv.on('error', reject);
   });
-  server = spawn(process.execPath, ['server.mjs', String(PORT)], { stdio: 'ignore' });
+  server = spawn(process.execPath, [path.join(ROOT, 'server.mjs'), String(PORT)], { stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 1500));
   base = `http://localhost:${PORT}`;
 });
@@ -30,8 +33,8 @@ const enc = encodeURIComponent;
 const XC = enc('公务员·行测'), ZC = enc('事业编·职测'), SL = enc('公务员·申论');
 
 // 题库直查（年份/难度反查 + 材料组预检）
-const db = new DatabaseSync('tiku.db', { readOnly: true });
-const pdb = new DatabaseSync('practice.db', { readOnly: true });
+const db = new DatabaseSync(path.join(ROOT, 'tiku.db'), { readOnly: true });
+const pdb = new DatabaseSync(path.join(ROOT, 'practice.db'), { readOnly: true });
 const yearsOf = (qid) => db.prepare(
   'SELECT substr(p.name,1,4) y FROM questions q JOIN papers p ON p.id = q.paperId WHERE q.questionId = ?'
 ).all(qid).map((r) => r.y);
@@ -197,7 +200,7 @@ test('无年份试卷存在且被年份条件排除（SQL 级）', () => {
 
 // ==================== 离线端同构（lib/local-queries.mjs） ====================
 function offlineApi() {
-  const odb = new DatabaseSync('app-assets/tiku_app.db', { readOnly: true });
+  const odb = new DatabaseSync(path.join(ROOT, 'app-assets', 'tiku_app.db'), { readOnly: true });
   const engine = { get: (sql, ...p) => odb.prepare(sql).get(...p), all: (sql, ...p) => odb.prepare(sql).all(...p) };
   return { api: createLocalApi(engine, engine, {}), close: () => odb.close() };
 }

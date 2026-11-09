@@ -69,7 +69,7 @@ function buildZip(files) {
 
 // ---------- 解析器测试（skill-importer.js） ----------
 test('frontmatter 解析：name/description/引号/续行', async () => {
-  const { extractFrontmatter } = await import('./public/lib/skill-importer.js');
+  const { extractFrontmatter } = await import('../public/lib/skill-importer.js');
   const r1 = extractFrontmatter('---\nname: my-skill\ndescription: 我的技能\n---\n正文内容');
   assert.strictEqual(r1.name, 'my-skill');
   assert.strictEqual(r1.description, '我的技能');
@@ -83,7 +83,7 @@ test('frontmatter 解析：name/description/引号/续行', async () => {
 });
 
 test('parseSkillText：缺 name 回退 + 拼接格式', async () => {
-  const { parseSkillText, composeSkillText } = await import('./public/lib/skill-importer.js');
+  const { parseSkillText, composeSkillText } = await import('../public/lib/skill-importer.js');
   const p = parseSkillText('---\ndescription: 说明\n---\n正文', 'fallback-name');
   assert.strictEqual(p.name, 'fallback-name');
   assert.strictEqual(p.description, '说明');
@@ -96,7 +96,7 @@ test('parseSkillText：缺 name 回退 + 拼接格式', async () => {
 });
 
 test('parseSkillZip：SKILL.md + references 任意层级 md/json，排除 examples/README', async () => {
-  const { parseSkillZip } = await import('./public/lib/skill-importer.js');
+  const { parseSkillZip } = await import('../public/lib/skill-importer.js');
   const zip = buildZip([
     { name: 'my-pack/SKILL.md', content: '---\nname: pack-skill\ndescription: 打包技能\n---\n主正文' },
     { name: 'my-pack/references/ref1.md', content: '参考一' },
@@ -122,7 +122,7 @@ test('parseSkillZip：SKILL.md + references 任意层级 md/json，排除 exampl
 });
 
 test('parseSkillZip：无 frontmatter 用顶层目录名；无 SKILL.md 报错', async () => {
-  const { parseSkillZip } = await import('./public/lib/skill-importer.js');
+  const { parseSkillZip } = await import('../public/lib/skill-importer.js');
   const zip = buildZip([
     { name: 'dir-name/SKILL.md', content: '正文' },
     { name: 'dir-name/references/a.md', content: 'r' },
@@ -133,7 +133,7 @@ test('parseSkillZip：无 frontmatter 用顶层目录名；无 SKILL.md 报错',
 });
 
 test('detectSkillUrlKind / validateSkill / base64ToBytes', async () => {
-  const { detectSkillUrlKind, validateSkill, base64ToBytes } = await import('./public/lib/skill-importer.js');
+  const { detectSkillUrlKind, validateSkill, base64ToBytes } = await import('../public/lib/skill-importer.js');
   assert.strictEqual(detectSkillUrlKind('https://x/y.zip?raw=1'), 'zip');
   assert.strictEqual(detectSkillUrlKind('https://x/SKILL.md'), 'text');
   assert.strictEqual(detectSkillUrlKind('https://x/a.txt'), 'text');
@@ -149,7 +149,7 @@ test('detectSkillUrlKind / validateSkill / base64ToBytes', async () => {
 test('Web 端 user_skills CRUD + resolveSkill 优先级', async () => {
   const tmpDb = path.join(os.tmpdir(), `ai-config-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   process.env.AI_CONFIG_DB = tmpDb;
-  const agents = await import('./lib/ai-agents.mjs');
+  const agents = await import('../lib/ai-agents.mjs');
 
   // 初始：未知名 → 纯文本回退
   assert.deepStrictEqual(agents.resolveSkill('no-such-skill').loaded, null);
@@ -239,7 +239,7 @@ test('App 端技能库 CRUD + 解析优先级（IndexedDB mock）', async () => 
   };
   global.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
-  const { createAiApi } = await import('./public/ai-local.js');
+  const { createAiApi } = await import('../public/ai-local.js');
   const ai = await createAiApi({ request: async () => ({ ok: false, status: 0 }), tiku: null, query: null, defaultsUrl: 'file:///nonexistent-defaults.json' });
 
   // 初始为空

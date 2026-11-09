@@ -52,6 +52,7 @@
 │   ├── xingce-chapter-map.mjs # 真题章节 → 树节点映射
 │   ├── pdf-ocr.mjs            # 申论材料 PDF 视觉 OCR（可选）
 │   └── local-queries.mjs      # App 端本地查询
+├── test/                      # 自动化测试（node --test，运行 `npm test`）
 ├── app/                       # Capacitor Android 工程
 ├── ref-skills/                # 开源考公技能上游副本（仅参考，运行时从本地技能库加载）
 ├── docs/                      # 设计与技术文档

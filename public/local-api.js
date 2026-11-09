@@ -7,7 +7,7 @@
  *   图片    —— images.db 公式图查询 + 真图形缓存接口
  *
  * 引擎适配器（调用方按运行环境注入其一）：
- *   - node：node:sqlite（开发/测试，见 test-local-api.mjs）
+ *   - node：node:sqlite（开发/测试，见 test/test-local-api.mjs）
  *   - App：CapacitorSQLite 插件（阶段 5）
  *   - 浏览器调试：sql.js + gz 资源
  * 记录存储适配器（阶段 3 提供 IndexedDB 实现）：

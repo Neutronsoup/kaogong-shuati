@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(__dirname, '..');
 const PORT = 3187;
 const BASE = `http://127.0.0.1:${PORT}`;
 const SUF = Date.now().toString(36).slice(-6);
@@ -32,7 +33,7 @@ const get = async (p, token) => {
 };
 
 before(async () => {
-  serverProc = spawn(process.execPath, ['server.mjs', String(PORT)], { cwd: __dirname, stdio: 'ignore', env: { ...process.env, KAOGONG_INVITE: 'e2e-invite' } });
+  serverProc = spawn(process.execPath, [path.join(ROOT, 'server.mjs'), String(PORT)], { cwd: ROOT, stdio: 'ignore', env: { ...process.env, KAOGONG_INVITE: 'e2e-invite' } });
   for (let i = 0; i < 100; i++) {
     try { const r = await fetch(BASE + '/api/subjects'); if (r.ok) break; } catch {}
     await new Promise((r) => setTimeout(r, 200));
@@ -43,7 +44,7 @@ after(async () => {
   if (serverProc) { serverProc.kill('SIGKILL'); await new Promise((r) => setTimeout(r, 500)); }
   // 清理本次测试创建的用户及其数据（不动真实游客/历史数据）
   try {
-    const db = new DatabaseSync(path.join(__dirname, 'practice.db'), { timeout: 10000 });
+    const db = new DatabaseSync(path.join(ROOT, 'practice.db'), { timeout: 10000 });
     for (const id of createdUserIds) {
       db.prepare('DELETE FROM practice_records WHERE user_id = ?').run(id);
       db.prepare('DELETE FROM favorites WHERE user_id = ?').run(id);
@@ -116,8 +117,8 @@ test('笔记按用户隔离：同题各自内容互不覆盖', async () => {
 });
 
 test('一次性邀请码：可用一次，二次失效，假码拒绝', async () => {
-  const { ensureAuthSchema, createAuth } = await import('./lib/auth.mjs');
-  const db = new DatabaseSync(path.join(__dirname, 'practice.db'));
+  const { ensureAuthSchema, createAuth } = await import('../lib/auth.mjs');
+  const db = new DatabaseSync(path.join(ROOT, 'practice.db'));
   ensureAuthSchema(db);
   const a = createAuth(db);
   const code = `E2E-${Date.now().toString(36).toUpperCase().slice(-6)}-TST`;

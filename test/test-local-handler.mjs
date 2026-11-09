@@ -93,7 +93,7 @@ const ROUTES = [
 ];
 
 test('本地路由：app.js 全部 API 路径均有实现且不抛"未实现"', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const mocks = makeMocks();
   const handler = createLocalHandler(mocks);
   const errors = [];
@@ -113,7 +113,7 @@ test('本地路由：app.js 全部 API 路径均有实现且不抛"未实现"', 
 });
 
 test('本地路由：路径解析正确（papers/:id 调用 paperById）', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const mocks = makeMocks();
   const handler = createLocalHandler(mocks);
   await handler('/api/papers/123', { method: 'GET' });
@@ -123,7 +123,7 @@ test('本地路由：路径解析正确（papers/:id 调用 paperById）', async
 });
 
 test('本地路由：DELETE /ai/explain-cache 调用 ai.clearExplainCache', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const mocks = makeMocks();
   const handler = createLocalHandler(mocks);
   await handler('/api/ai/explain-cache', { method: 'DELETE' });
@@ -131,7 +131,7 @@ test('本地路由：DELETE /ai/explain-cache 调用 ai.clearExplainCache', asyn
 });
 
 test('本地路由：POST /check 传 body.questionId', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const mocks = makeMocks();
   mocks.query.questionById = (id) => { mocks.calls.push(['query.questionById', id]); return { answerIndex: 0, options: ['A', 'B', 'C', 'D'] }; };
   const handler = createLocalHandler(mocks);
@@ -142,7 +142,7 @@ test('本地路由：POST /check 传 body.questionId', async () => {
 });
 
 test('本地路由：非 /api 路径抛错提示', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
+  const { createLocalHandler } = await import('../public/local-handler.js');
   const mocks = makeMocks();
   const handler = createLocalHandler(mocks);
   await assert.rejects(() => handler('/other/path', { method: 'GET' }), /本地模式不支持的路径/);

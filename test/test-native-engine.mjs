@@ -45,7 +45,7 @@ const mockNativeDB = {
 };
 window.NativeDB = mockNativeDB;
 
-const { loadNativeEngine } = await import('./public/sqljs-engine.js');
+const { loadNativeEngine } = await import('../public/sqljs-engine.js');
 
 test('原生桥：open 成功并返回引擎', () => {
   const engine = loadNativeEngine();

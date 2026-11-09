@@ -9,6 +9,9 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const PORT = 4900 + Math.floor(Math.random() * 200);
 let server, base;
@@ -21,7 +24,7 @@ before(async () => {
     srv.listen(PORT, () => { srv.close(resolve); });
     srv.on('error', reject);
   });
-  server = spawn(process.execPath, ['server.mjs', String(PORT)], { stdio: 'ignore' });
+  server = spawn(process.execPath, [path.join(ROOT, 'server.mjs'), String(PORT)], { stdio: 'ignore' });
   const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
     try { const r = await fetch(`http://localhost:${PORT}/`); if (r.ok) break; } catch {}
@@ -97,9 +100,9 @@ test('server：自定义题归「自定义题库」（不分子模块）', async
 });
 
 test('本地 handler：归档 / 过滤 / 总览 / 一键整理同构', async () => {
-  const { createLocalHandler } = await import('./public/local-handler.js');
-  const { createRecordsApi } = await import('./public/local-api.js');
-  const tiku = new DatabaseSync('app-assets/tiku_app.db', { readOnly: true });
+  const { createLocalHandler } = await import('../public/local-handler.js');
+  const { createRecordsApi } = await import('../public/local-api.js');
+  const tiku = new DatabaseSync(path.join(ROOT, 'app-assets', 'tiku_app.db'), { readOnly: true });
   const engine = { get: (s, ...p) => tiku.prepare(s).get(...p), all: (s, ...p) => tiku.prepare(s).all(...p) };
   // 本地记录存储（records 主键 id 覆盖；notes/favorites 主键 question_id 覆盖，与 IndexedDB 一致）
   const mem = { records: [], favorites: [], custom_questions: [], custom_batches: [], notes: [] };
