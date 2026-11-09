@@ -2,6 +2,7 @@
 // adduser.mjs —— 管理员账号维护 CLI（零依赖）
 // 用法：
 //   node adduser.mjs add 小明 123456            # 建普通账号
+//   node adduser.mjs add owner 密码 --admin     # 建管理员(可管理 AI 配置)
 //   node adduser.mjs list                       # 列出所有账号（含状态/最后登录）
 //   node adduser.mjs passwd 小明 newpass123     # 重置密码
 //   node adduser.mjs ban 小明                   # 禁用（并踢下线）
@@ -25,7 +26,7 @@ function open() {
 
 function usage() {
   console.log(`用法:
-  node adduser.mjs add <昵称> <密码>
+  node adduser.mjs add <昵称> <密码> [--admin]
   node adduser.mjs list
   node adduser.mjs passwd <昵称> <新密码>
   node adduser.mjs ban <昵称>
@@ -37,8 +38,9 @@ const { pdb, auth } = open();
 try {
   if (cmd === 'add') {
     if (!a1 || !a2) { usage(); process.exit(1); }
-    const id = auth.createUser(a1, a2, 'user');
-    console.log(`✓ 已创建用户 #${id}：${a1}`);
+    const role = process.argv.includes('--admin') ? 'admin' : 'user';
+    const id = auth.createUser(a1, a2, role);
+    console.log(`✓ 已创建${role === 'admin' ? '管理员' : '用户'} #${id}：${a1}`);
   } else if (cmd === 'list') {
     const rows = auth.listUsers();
     if (!rows.length) { console.log('（暂无账号）'); }

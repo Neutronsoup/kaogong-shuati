@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { listAgents, getAgent, updateAgent, getHistory, callAgent, initAiConfig, listUserSkills, addUserSkill, deleteUserSkill } from './lib/ai-agents.mjs';
 import { extractMaterialFromPdf } from './lib/pdf-ocr.mjs';
 import { FENBI_TREE, ESSAY_TREE, SHENLUN_TREE, ZONGYING_TREE } from './lib/fenbi-tree.mjs';
@@ -305,6 +306,64 @@ function recordLoginFail(key) {
 function clientIp(req) {
   const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   return xf || req.socket.remoteAddress || '';
+}
+
+/** 判断 IP 是否属于内网/回环/链路本地/元数据等敏感网段 */
+function isPrivateIp(ip) {
+  if (!ip) return true;
+  const low = String(ip).toLowerCase();
+  if (low.includes(':')) {
+    if (low === '::1' || low === '::' || low === '0:0:0:0:0:0:0:1') return true;
+    if (low.startsWith('fc') || low.startsWith('fd') || low.startsWith('fe80')) return true;
+    const m = low.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (m) return isPrivateIp(m[1]);
+    return false;
+  }
+  const p = low.split('.').map(Number);
+  if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+  const [a, b] = p;
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 169 && b === 254) return true;               // 云元数据 169.254.169.254
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;      // CGNAT
+  return false;
+}
+
+/** SSRF 防护：仅允许 http(s)，解析域名并拒绝内网/回环/元数据地址 */
+async function assertSafeUrlForFetch(raw) {
+  let u;
+  try { u = new URL(String(raw).trim()); } catch { throw Object.assign(new Error('URL 不合法'), { httpStatus: 400 }); }
+  if (!/^https?:$/.test(u.protocol)) throw Object.assign(new Error('仅支持 http(s) 地址'), { httpStatus: 400 });
+  const host = u.hostname;
+  if (!host) throw Object.assign(new Error('URL 缺少主机名'), { httpStatus: 400 });
+  const lower = host.toLowerCase();
+  if (lower === 'localhost' || lower.endsWith('.localhost') || lower === 'metadata.google.internal' || lower.endsWith('.internal')) {
+    throw Object.assign(new Error('禁止访问内网地址'), { httpStatus: 400 });
+  }
+  let addrs = [];
+  try { addrs = await dnsLookup(host, { all: true }); } catch { throw Object.assign(new Error('域名解析失败'), { httpStatus: 400 }); }
+  if (!addrs.length) throw Object.assign(new Error('域名解析为空'), { httpStatus: 400 });
+  for (const a of addrs) {
+    if (isPrivateIp(a.address)) throw Object.assign(new Error('禁止访问内网/回环地址'), { httpStatus: 400 });
+  }
+  return u;
+}
+
+/** 带大小上限地读取请求体（默认 32MB），超限抛 413 并断开连接 */
+async function readBody(req, limit = 32 * 1024 * 1024) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) {
+      // 不再继续读取；交给上层返回 413（不强制 destroy，避免客户端只看到连接重置）
+      try { req.pause && req.pause(); } catch {}
+      throw Object.assign(new Error('请求体过大'), { httpStatus: 413 });
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 /** 注册邀请码：优先环境变量 KAOGONG_INVITE，其次可写文件 invite.txt；都没有则不限制（本地开发） */
@@ -1483,6 +1542,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = decodeURIComponent(url.pathname);
 
+  // 基础安全响应头（对静态与 API 都生效）
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+
   // ---- API ----
   if (pathname.startsWith('/api/')) {
     try {
@@ -1497,6 +1561,16 @@ const server = http.createServer(async (req, res) => {
         return json(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
       }
 
+      // AI 配置/技能管理类接口：仅管理员（防止普通用户改 base_url 导致 key 外泄）
+      const isAiAdminPath =
+        pathname.startsWith('/api/ai/agents') ||
+        pathname === '/api/ai/models-proxy' ||
+        pathname === '/api/ai/explain-cache' ||
+        pathname.startsWith('/api/skills');
+      if (isAiAdminPath && (!req.user || req.user.role !== 'admin')) {
+        return json(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: '仅管理员可管理 AI 配置/技能' } });
+      }
+
       // AI / 技能相关接口：必须登录 + 限流（防止未登录盗刷服务器 AI key）
       if (pathname.startsWith('/api/ai/') || pathname.startsWith('/api/skills')) {
         if (!req.user) return json(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: '请先登录后使用 AI 功能' } });
@@ -1506,8 +1580,7 @@ const server = http.createServer(async (req, res) => {
       // ============ 认证接口 ============
       // 登录：昵称 + 密码 → { token, user }；连续 5 次失败锁 15 分钟
       if (pathname === '/api/auth/login' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { username, password } = JSON.parse(body || '{}');
         const name = String(username || '').trim();
         if (!name || !password) return json(res, 200, { ok: false, error: { code: 'BAD_REQUEST', message: '请输入昵称和密码' } });
@@ -1527,7 +1600,7 @@ const server = http.createServer(async (req, res) => {
         loginFails.delete(key);
         const token = auth.createSession(u.id, req.headers['user-agent'] || '');
         pdb.prepare("UPDATE users SET last_login_at = datetime('now','localtime') WHERE id = ?").run(u.id);
-        return json(res, 200, { ok: true, data: { token, user: { id: u.id, username: u.username } } });
+        return json(res, 200, { ok: true, data: { token, user: { id: u.id, username: u.username, role: u.role } } });
       }
       // 注册：一人一码、用一次失效（invites 表）；兼容环境变量/文件里的"总邀请码"作为你的应急口令
       if (pathname === '/api/auth/register' && req.method === 'POST') {
@@ -1535,8 +1608,7 @@ const server = http.createServer(async (req, res) => {
         if (!regRateAllow(ip)) {
           return json(res, 200, { ok: false, error: { code: 'RATE_LIMITED', message: '注册过于频繁，请稍后再试' } });
         }
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         let payload = {};
         try { payload = JSON.parse(body || '{}'); } catch {}
         const { username, password, inviteCode } = payload;
@@ -1567,7 +1639,7 @@ const server = http.createServer(async (req, res) => {
           }
         }
         const token = auth.createSession(id, req.headers['user-agent'] || '');
-        return json(res, 200, { ok: true, data: { token, user: { id, username: String(username).trim() } } });
+        return json(res, 200, { ok: true, data: { token, user: { id, username: String(username).trim(), role: 'user' } } });
       }
       // 退出登录
       if (pathname === '/api/auth/logout' && req.method === 'POST') {
@@ -1908,8 +1980,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 智能组卷：POST /api/paper/generate —— 契约 intelligent-paper-contract.md §4.1（行测 + 职测）
       if (pathname === '/api/paper/generate' && req.method === 'POST') {
-        let raw = '';
-        for await (const chunk of req) raw += chunk;
+        const raw = await readBody(req);
         let body = {};
         try { body = JSON.parse(raw || '{}'); } catch { /* 保持 {} */ }
         try {
@@ -1971,8 +2042,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 收藏：添加/取消
       if (pathname === '/api/favorites' && (req.method === 'POST' || req.method === 'DELETE')) {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { questionId, subject, chapter } = JSON.parse(body || '{}');
         if (questionId == null) return err(res, 400, '缺少 questionId');
         const uid = req.user ? req.user.id : null;
@@ -2050,8 +2120,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 笔记：添加/修改（一题一笔记，已存在则更新 note 与 updated_at）/ 删除
       if (pathname === '/api/notes' && (req.method === 'POST' || req.method === 'DELETE')) {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { questionId, subject, chapter, note } = JSON.parse(body || '{}');
         if (questionId == null) return err(res, 400, '缺少 questionId');
         const uid = req.user ? req.user.id : null;
@@ -2079,8 +2148,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 判分（粉笔题 + 自定义题 custom- 前缀均支持）
       if (pathname === '/api/check' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { questionId, selected } = JSON.parse(body || '{}');
         if (questionId == null) return err(res, 400, '缺少 questionId');
         let q = null;
@@ -2097,8 +2165,7 @@ const server = http.createServer(async (req, res) => {
       // ---- 自定义题库（2026-08-15）：批次=一次导入的文件；题目字段与粉笔 questions 同构 ----
       // 导入：建批次 + 批量插题（前端已解析成结构化字段）
       if (pathname === '/api/custom/import' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { name, questions, subject } = JSON.parse(body || '{}');
         if (!name || !Array.isArray(questions) || questions.length === 0) return err(res, 400, '缺少批次名或题目');
         const subj = String(subject || '').trim() || '自定义';
@@ -2141,8 +2208,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 批改名（可同时改科目）
       if (pathname === '/api/custom/batch' && req.method === 'PUT') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { id, name, subject } = JSON.parse(body || '{}');
         const nid = Number(id);
         if (!nid || !String(name || '').trim()) return err(res, 400, '缺少 id 或批次名');
@@ -2156,8 +2222,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 合并批次：把选中的批次题目并入第一个（id 最小）批次，删其余批次
       if (pathname === '/api/custom/batch/merge' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { ids, name } = JSON.parse(body || '{}');
         const idList = (Array.isArray(ids) ? ids : []).map(Number).filter(Boolean);
         if (idList.length < 2) return err(res, 400, '至少选择两个批次');
@@ -2179,8 +2244,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 拆分批次：勾选题目移入新批次
       if (pathname === '/api/custom/batch/split' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { batch_id, question_ids, name } = JSON.parse(body || '{}');
         const bid = Number(batch_id);
         const qids = (Array.isArray(question_ids) ? question_ids : []).map(Number).filter(Boolean);
@@ -2211,8 +2275,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 改单题
       if (pathname === '/api/custom/question' && req.method === 'PUT') {
-        let raw = '';
-        for await (const chunk of req) raw += chunk;
+        const raw = await readBody(req);
         const parsed = JSON.parse(raw || '{}');
         const { id, prompt, material, options, answer, answer_index, analysis, images } = parsed;
         const qid = Number(id);
@@ -2260,8 +2323,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 材料分组/取消分组：同一 material_id 的题刷题时共用一份材料（显示 第 n/m 小问）
       if (pathname === '/api/custom/questions/group' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { ids, action, groupId } = JSON.parse(body || '{}');
         const idList = (Array.isArray(ids) ? ids : []).map(Number).filter(Boolean);
         if (!idList.length) return err(res, 400, '请先勾选题目');
@@ -2321,8 +2383,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 按材料内容自动分组：相同材料文本归为一组（≥2 题才分组；空材料不参与）
       if (pathname === '/api/custom/questions/auto-group' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { batch_id } = JSON.parse(body || '{}');
         const bid = Number(batch_id);
         if (!bid) return err(res, 400, '缺少 batch_id');
@@ -2355,8 +2416,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 判分：复用 checkAnswer，写 practice_records（subject='自定义'，chapter=批次名）
       if (pathname === '/api/custom/check' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { questionId, selected, batchId, chapter } = JSON.parse(body || '{}');
         const cid = Number(String(questionId || '').replace(/^custom-/, ''));
         if (!cid) return err(res, 400, '缺少 questionId');
@@ -2386,8 +2446,7 @@ const server = http.createServer(async (req, res) => {
       // ---- 做题记录（practice.db，服务端跨设备同步） ----
       // 提交一条做题记录（前端判分后自动上报）
       if (pathname === '/api/records' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { questionId, subject, chapter, type, selected, correct, costMs, paperId } = JSON.parse(body || '{}');
         if (questionId == null) return err(res, 400, '缺少 questionId');
         // 来源归档：按题目真实来源算大模块/子模块（与错题本/收藏/笔记分组同口径），旧记录靠一键整理回填
@@ -2528,8 +2587,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 清空错题（软删除：archived=1，统计历史保留；按 id 单条移除；questionId 按题移除；subject 指定时只清该模块）
       if (pathname === '/api/records/wrong' && req.method === 'DELETE') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { id, questionId, subject, group } = JSON.parse(body || '{}');
         const us = userScope(req);
         const U = us.sql; const P = us.params;
@@ -2542,8 +2600,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 一键整理：错题本/收藏/笔记 全部按题目真实来源重新归档（幂等可重复；老用户历史数据回填 group_key/sub_key）
       if (pathname === '/api/organize' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { target } = JSON.parse(body || '{}');
         const tables = {
           wrong: { table: 'practice_records', where: ' WHERE is_correct = 0 AND archived = 0' },
@@ -2605,8 +2662,7 @@ const server = http.createServer(async (req, res) => {
       // prompt/skill 变化会清空题目解析缓存，否则改完提示词看到的还是旧解析）
       if (pathname.match(/^\/api\/ai\/agents\/\d+$/) && req.method === 'PUT') {
         const id = Number(pathname.split('/')[4]);
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const fields = JSON.parse(body || '{}');
         const r = updateAgent(id, fields);
         if (r.error) return err(res, 400, r.error);
@@ -2624,8 +2680,7 @@ const server = http.createServer(async (req, res) => {
       // 模型列表代理（Web 浏览器直连第三方网关被 CORS 拦截时的兜底；
       // 服务端 node fetch 无 CORS；App 端走 CapacitorHttp 直连无需此代理）
       if (pathname === '/api/ai/models-proxy' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { baseUrl, apiKey } = JSON.parse(body || '{}');
         let base = String(baseUrl || '').trim().replace(/\/+$/, '');
         if (!base) return err(res, 400, '请先填写 Base URL');
@@ -2635,14 +2690,18 @@ const server = http.createServer(async (req, res) => {
         let lastErr = '';
         for (const u of cands) {
           try {
+            const safe = await assertSafeUrlForFetch(u); // SSRF 防护
             const ctrl = new AbortController();
             const t = setTimeout(() => ctrl.abort(), 30000);
-            const resp = await fetch(u, {
+            const resp = await fetch(safe, {
               headers: { Accept: 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
               signal: ctrl.signal,
+              redirect: 'manual',
             });
             clearTimeout(t);
+            if (resp.status >= 300 && resp.status < 400) { lastErr = '目标发生了重定向（已拒绝）'; continue; }
             const text = await resp.text();
+            if (text.length > 2 * 1024 * 1024) { lastErr = '响应过大'; continue; }
             if (resp.ok) {
               try {
                 const data = JSON.parse(text);
@@ -2666,8 +2725,7 @@ const server = http.createServer(async (req, res) => {
       // 测试调用（用当前配置真实调用一次 LLM）
       if (pathname.match(/^\/api\/ai\/agents\/\d+\/test$/) && req.method === 'POST') {
         const id = Number(pathname.split('/')[4]);
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { content } = JSON.parse(body || '{}');
         const agent = getAgent(id);
         if (!agent) return err(res, 404, 'AI 不存在');
@@ -2683,8 +2741,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 新增/覆盖技能（同名 = 覆盖）；被智能体引用时清空解析缓存（覆盖前的旧技能内容仍在缓存里）
       if (pathname === '/api/skills' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const r = addUserSkill(JSON.parse(body || '{}'));
         if (r.error) return err(res, 400, r.error);
         if (r.referenced) {
@@ -2704,15 +2761,17 @@ const server = http.createServer(async (req, res) => {
       }
       // URL 代理拉取（Web 浏览器直连被 CORS 挡住时的兜底；App 端走 CapacitorHttp 直连无此问题）
       if (pathname === '/api/skills/fetch' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { url } = JSON.parse(body || '{}');
         const u = String(url || '').trim();
         if (!/^https?:\/\//i.test(u)) return err(res, 400, '仅支持 http(s) 链接');
         try {
+          const safeUrl = await assertSafeUrlForFetch(u); // SSRF 防护
           const ctrl = new AbortController();
           const t = setTimeout(() => ctrl.abort(), 30000);
-          const resp = await fetch(u, { signal: ctrl.signal, redirect: 'follow' });
+          const resp = await fetch(safeUrl, { signal: ctrl.signal, redirect: 'manual' });
+          clearTimeout(t);
+          if (resp.status >= 300 && resp.status < 400) return err(res, 400, '目标发生了重定向（已拒绝）');
           clearTimeout(t);
           if (!resp.ok) return err(res, 400, `拉取失败：HTTP ${resp.status}`);
           const contentLength = Number(resp.headers.get('content-length') || 0);
@@ -2734,8 +2793,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 行测 AI 解析（真实调用行测解析 AI，按题目 + 作答情况生成解析）
       if (pathname === '/api/ai/explain' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { questionId, selected, correct, questionData } = JSON.parse(body || '{}');
         if (questionId == null && !(questionData && (questionData.content || questionData.prompt))) return err(res, 400, '缺少 questionId');
         const agent = getAgent('xingce-explainer');
@@ -2927,8 +2985,7 @@ const server = http.createServer(async (req, res) => {
       }
       // ---- 识图导入作答（OCR）：拍照/上传答案图片 → 视觉AI 识别成文字 ----
       if (pathname === '/api/ai/ocr' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { image, subject } = JSON.parse(body || '{}'); // data:image/...;base64,xxx
         if (!image || !image.startsWith('data:image')) return err(res, 400, '缺少图片（data URL）');
         const m = image.match(/^data:(image\/[a-z+]+);base64,(.+)$/i);
@@ -2956,8 +3013,7 @@ const server = http.createServer(async (req, res) => {
       // ---- 自定义题库：题目筛选整理（custom-question-parser） ----
       // 纯文本 → 文本模型结构化；带图片 → 视觉模型直接看图出结构化 JSON（AI 优先，失败自动降级 OCR→文本结构化）
       if (pathname === '/api/ai/structure' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { text, image } = JSON.parse(body || '{}');
         const agent = getAgent('custom-question-parser');
         if (!agent) return json(res, 200, { notice: '题目解析员未启用，请到 AI 设置页配置', text: null });
@@ -3029,8 +3085,7 @@ const server = http.createServer(async (req, res) => {
       }
       // 申论 AI 批改（真实调用申论批改 AI）
       if (pathname === '/api/ai/grade' && req.method === 'POST') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
+        const body = await readBody(req);
         const { questionId, content, material } = JSON.parse(body || '{}');
         const agent = getAgent('shenlun-grader');
         if (!agent || !agent.api_key) {
@@ -3100,7 +3155,9 @@ const server = http.createServer(async (req, res) => {
       }
       return err(res, 404, '接口不存在');
     } catch (e) {
-      return err(res, 500, `服务器错误: ${e.message}`);
+      const code = (e && e.httpStatus) || 500;
+      if (code >= 500) console.error('[api] 未处理异常:', (e && e.stack) || e);
+      return err(res, code, code >= 500 ? '服务器内部错误' : (e && e.message) || '请求错误');
     }
   }
 

@@ -667,7 +667,7 @@ async function renderProfile() {
       <div class="profile-avatar">${esc((u.username || '?').slice(0, 1))}</div>
       <div class="profile-id">
         <div class="profile-name">${esc(u.username)}</div>
-        <div class="profile-role">已登录${u.id ? ' · ID ' + u.id : ''}</div>
+        <div class="profile-role">${u.role === 'admin' ? '管理员' : '普通用户'}${u.id ? ' · ID ' + u.id : ''}</div>
       </div>
     `;
   } else {
@@ -797,8 +797,8 @@ async function renderHome() {
     $('#quick-wrong').onclick = () => renderWrong();
     $('#quick-fav').onclick = () => renderFavorites();
     $('#quick-note').onclick = () => renderNotes();
-    if (!store.user) { const qa = $('#quick-ai'); if (qa) qa.style.display = 'none'; }
-    else $('#quick-ai').onclick = () => renderAiSettings();
+    if (store.user && store.user.role === 'admin') { $('#quick-ai').onclick = () => renderAiSettings(); }
+    else { const qa = $('#quick-ai'); if (qa) qa.style.display = 'none'; }
     $('#quick-paper').onclick = () => openPaperConfig();
     // 服务端错题/收藏/笔记计数（异步刷新）
     api('/api/records/stats').then((s) => {
