@@ -226,7 +226,7 @@ const store = {
   subjects: [],
   user: null,     // 当前登录用户 {id, username, role}；null = 游客
   guest: false,   // 主动选择「游客模式」
-  state: { view: 'home', subject: null, chapter: null, mode: null, questions: [], idx: 0, results: [], answers: [], timing: null },
+  state: { view: 'home', subject: null, chapter: null, mode: null, questions: [], idx: 0, results: [], answers: [], timing: null, exam: null },
   wrong: JSON.parse(localStorage.getItem('wrong_questions') || '[]'), // [{id, content, answer, myAnswer, subject, chapter, time}]
   fav: new Set(), // 收藏题 id（服务端跨设备同步）
   notes: new Set(), // 笔记题 id（服务端跨设备同步；做题页「查看笔记/添加笔记」状态切换）
@@ -288,6 +288,7 @@ function startTimer(limitSec) {
     limit: limitSec > 0 ? limitSec : null, // 秒；null=正计时
     elapsed: 0,            // 秒
     remaining: limitSec > 0 ? limitSec : 0,
+    exam: store.state.exam || null, // 服务端考试会话 {sessionId, deadline(ms), offset(ms)}
   };
   const tick = () => {
     const t = s.timing;
@@ -310,6 +311,13 @@ function startTimer(limitSec) {
 /** 按真实时间刷新 elapsed / remaining（暂停时用 accumulatedMs，运行中用 now-startedAt） */
 function updateTiming(t) {
   if (!t) return;
+  // 考试模式：以服务端 deadline 为准（含时钟偏移校正），后台/休眠也不会错
+  if (t.exam && t.exam.deadline) {
+    const remainMs = t.exam.deadline - (Date.now() + (t.exam.offset || 0));
+    t.remaining = Math.max(0, Math.ceil(remainMs / 1000));
+    t.elapsed = Math.max(0, (t.limit || 0) - t.remaining);
+    return;
+  }
   const ms = (t.accumulatedMs || 0) + (t.running ? (Date.now() - t.startedAt) : 0);
   t.elapsed = Math.floor(ms / 1000);
   if (t.limit) t.remaining = Math.max(0, t.limit - t.elapsed);
@@ -324,6 +332,7 @@ function renderTimerText() {
 function pauseToggle() {
   const s = store.state;
   if (!s.timing) return;
+  if (s.exam) { toast('考试进行中不可暂停'); return; }
   const t = s.timing;
   updateTiming(t);
   if (t.running) {
@@ -2517,7 +2526,7 @@ async function renderPractice(subject, chapter, paperId, mock, skipNav, group, s
 }
 
 /** 进入刷题状态（随机/章节/组卷/自定义共用）：写入 store、开计时、渲染首题；backMode=背题模式 */
-function enterQuiz(questions, subject, mode, chapter, mock, limitSec, backMode) {
+function enterQuiz(questions, subject, mode, chapter, mock, limitSec, backMode, exam) {
   closeImageOverlays(); // 新开一套题，清理可能残留的全屏层
   store.state.questions = questions;
   store.state.idx = 0;
@@ -2528,6 +2537,7 @@ function enterQuiz(questions, subject, mode, chapter, mock, limitSec, backMode) 
   store.state.chapter = chapter ?? null;
   store.state.mock = mock ?? null;
   store.state.backMode = !!backMode;
+  store.state.exam = exam || null;
   stopTimer();
   startTimer(limitSec); // 组卷（mode='quiz'）传 durationMinutes×60 → 倒计时；其余正计时
   renderQuestion();
@@ -2758,16 +2768,20 @@ async function generatePaper(overlay) {
         if (best) payload.weak = [best.name];
       } catch { /* 统计不可用时跳过弱项加权 */ }
     }
-    const res = await api('/api/paper/generate', {
+    const res = await api('/api/exam/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) { toast(res.error || '组卷失败'); return; }
-    if (res.notice) toast(res.notice);
+    if (!res.ok || !res.data) { toast(res.error || '组卷失败'); return; }
+    const d = res.data;
     overlay.remove();
-    // 组卷成功直接开始做题（跳过预览页），带考试倒计时；renderPaperPreview 保留作试卷详情查看
-    enterQuiz(res.questions, res.subject, 'quiz', null, null, res.durationMinutes * 60); // 分钟→秒（startTimer 以秒递减）
+    // 服务端开考：计时以服务端 deadline 为准（防暂停/改本机时间/切后台丢时间）
+    enterQuiz(d.questions, d.subject, 'quiz', null, null, d.durationSec, false, {
+      sessionId: d.sessionId,
+      deadline: d.deadline,
+      offset: (d.serverNow || Date.now()) - Date.now(),
+    });
   } catch (e) {
     toast(`组卷失败：${e.message}`);
   } finally {
@@ -3163,10 +3177,10 @@ function renderQuestion() {
     view.appendChild(el('div', 'timer-bar', `
       <span class="timer-ico">${s.timing?.limit ? ico('hourglass', 15) : ico('clock', 15)}</span>
       <span id="timer-text">${s.timing?.limit ? fmtTime(s.timing.remaining) : fmtTime(s.timing?.elapsed ?? 0)}</span>
-      <button class="btn btn-ghost btn-sm" id="btn-pause" title="${s.timing?.running === false ? '继续' : '暂停'}">${s.timing?.running === false ? ico('play', 14) : ico('pause', 14)}</button>
-      <span class="timer-tip">${s.backMode ? '背题模式：点选即看答案，不自动跳题' : (s.timing?.limit ? '倒计时结束自动交卷' : '交卷后查看解析与成绩')}</span>
+      ${s.exam ? '' : `<button class="btn btn-ghost btn-sm" id="btn-pause" title="${s.timing?.running === false ? '继续' : '暂停'}">${s.timing?.running === false ? ico('play', 14) : ico('pause', 14)}</button>`}
+      <span class="timer-tip">${s.exam ? '考试计时（以服务端截止时间为准）' : (s.backMode ? '背题模式：点选即看答案，不自动跳题' : (s.timing?.limit ? '倒计时结束自动交卷' : '交卷后查看解析与成绩'))}</span>
     `));
-    $('#btn-pause').onclick = pauseToggle;
+    if ($('#btn-pause')) $('#btn-pause').onclick = pauseToggle;
   }
   // 答题进度条
   view.appendChild(el('div', 'q-progress-bar', `<div class="fill" style="width:${total ? Math.round(((s.idx) / total) * 100) : 0}%"></div>`));
@@ -3675,6 +3689,7 @@ function submitAnswer(q, selected, optWrap, opts, isMulti) {
         selected: Array.isArray(selected) ? selected : [selected],
         correct: r.ok,
         costMs: (Date.now() - (q._t0 || Date.now())),
+        examId: (store.state.exam && store.state.exam.sessionId) || undefined,
       }),
     }).catch(() => {});
     if (r.ok === false) {
@@ -3689,6 +3704,15 @@ async function submitExam(force) {
   const s = store.state;
   stampCost(s.idx);
   stopTimer();
+  // 服务端考试会话交卷：标记已交并判断是否超时（超过 deadline+15s）
+  let examId = null;
+  if (s.exam && s.exam.sessionId) {
+    examId = s.exam.sessionId;
+    try {
+      const r = await api(`/api/exam/${examId}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (r && r.ok && r.data && r.data.late) toast('已超时交卷，超时后的作答不计入成绩');
+    } catch (e) { console.warn('[exam] submit failed', e && e.message); }
+  }
   const unanswered = s.questions.map((_, i) => i).filter((i) => !s.answers[i] || s.answers[i].selected == null);
   if (unanswered.length && !force) { showUnanswered(unanswered); return; }
   // 强制交卷：未答的题按错误处理
@@ -3709,6 +3733,7 @@ async function submitExam(force) {
       body: JSON.stringify({
         questionId: q.id, subject: q.subject || s.subject, chapter: q.chapter, type: q.type,
         selected: selSorted || [], correct: finalCorrect, costMs: a.costMs,
+        examId: examId || undefined,
       }),
     }).catch(() => {});
     if (finalCorrect === false) {
@@ -3716,6 +3741,7 @@ async function submitExam(force) {
       saveWrong();
     }
   }
+  s.exam = null;
   renderReview();
 }
 /** 漏答提示弹层：未答题号 + 继续作答 / 直接交卷 */

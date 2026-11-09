@@ -13,6 +13,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { lookup as dnsLookup } from 'node:dns/promises';
+import { randomBytes } from 'node:crypto';
 import { listAgents, getAgent, updateAgent, getHistory, callAgent, initAiConfig, listUserSkills, addUserSkill, deleteUserSkill } from './lib/ai-agents.mjs';
 import { extractMaterialFromPdf } from './lib/pdf-ocr.mjs';
 import { FENBI_TREE, ESSAY_TREE, SHENLUN_TREE, ZONGYING_TREE } from './lib/fenbi-tree.mjs';
@@ -2020,6 +2021,69 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, groups);
       }
+      // ============ 服务端考试会话（方案A：服务端计时/截止） ============
+      // 开考：服务端生成/登记题目，返回 sessionId + 服务端截止时间 deadline(ms) + serverNow(ms)
+      if (pathname === '/api/exam/start' && req.method === 'POST') {
+        const body = await readBody(req);
+        let opts = {};
+        try { opts = JSON.parse(body || '{}'); } catch {}
+        try {
+          // 清理 7 天前的过期会话
+          try { pdb.prepare('DELETE FROM exam_sessions WHERE deadline_ms < ?').run(Date.now() - 7 * 86400000); } catch {}
+          let paper;
+          if (Array.isArray(opts.questionIds) && opts.questionIds.length) {
+            // 允许客户端提交已生成好的题号（预览页开考）
+            const ids = opts.questionIds.map((x) => Number(x)).filter(Boolean);
+            if (!ids.length || !opts.subject) return json(res, 200, { ok: false, error: '缺少题目或科目' });
+            paper = { subject: opts.subject, questions: ids.map((id) => ({ questionId: id })), durationMinutes: Number(opts.durationMinutes) || 0, total: ids.length };
+          } else if (opts.subject === '公务员·行测') {
+            paper = await buildXingcePaper(opts, req);
+          } else if (opts.subject === '事业编·职测') {
+            paper = await buildZhiCePaper(opts, req);
+          } else {
+            return json(res, 200, { ok: false, error: `「${opts.subject || '未知科目'}」考试暂未开放` });
+          }
+          if (paper && paper.ok === false) return json(res, 200, paper);
+          const questions = paper.questions || [];
+          if (!questions.length) return json(res, 200, { ok: false, error: '组卷失败：没有题目' });
+          const durationSec = Math.max(60, Number(opts.durationSec) || (Number(paper.durationMinutes) || 0) * 60 || 0);
+          const qids = questions.map((q) => Number(q.questionId ?? q.id)).filter(Boolean);
+          const id = randomBytes(16).toString('hex');
+          const now = Date.now();
+          const deadline = now + durationSec * 1000;
+          pdb.prepare('INSERT INTO exam_sessions (id, user_id, subject, duration_sec, question_ids, deadline_ms) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(id, req.user.id, String(paper.subject || opts.subject || ''), durationSec, JSON.stringify(qids), deadline);
+          return json(res, 200, { ok: true, data: { sessionId: id, deadline, serverNow: now, durationSec, subject: paper.subject || opts.subject, total: questions.length, questions } });
+        } catch (e) {
+          return json(res, 200, { ok: false, error: `开考失败：${e.message}` });
+        }
+      }
+      // 查询考试状态/剩余时间（刷新、回前台校正用）
+      if (pathname.match(/^\/api\/exam\/[a-f0-9]+$/) && req.method === 'GET') {
+        const id = pathname.split('/')[3];
+        const sess = pdb.prepare('SELECT * FROM exam_sessions WHERE id = ?').get(id);
+        if (!sess || sess.user_id !== req.user.id) return err(res, 404, '考试不存在');
+        const now = Date.now();
+        const remainingSec = Math.max(0, Math.ceil((sess.deadline_ms - now) / 1000));
+        if (sess.status === 0 && remainingSec <= 0) {
+          try { pdb.prepare('UPDATE exam_sessions SET status = 2 WHERE id = ?').run(id); } catch {}
+        }
+        const status = remainingSec <= 0 && sess.status === 0 ? 2 : sess.status;
+        return json(res, 200, { ok: true, data: { sessionId: id, status, remainingSec, deadline: sess.deadline_ms, serverNow: now, total: JSON.parse(sess.question_ids || '[]').length } });
+      }
+      // 交卷：标记已交，返回是否超时（late=true 表示超过 deadline+宽限）
+      if (pathname.match(/^\/api\/exam\/[a-f0-9]+\/submit$/) && req.method === 'POST') {
+        const id = pathname.split('/')[3];
+        const sess = pdb.prepare('SELECT * FROM exam_sessions WHERE id = ?').get(id);
+        if (!sess || sess.user_id !== req.user.id) return err(res, 404, '考试不存在');
+        const now = Date.now();
+        const late = now > sess.deadline_ms + 15000; // 15 秒宽限（网络/提交延迟）
+        if (sess.status === 0) {
+          pdb.prepare("UPDATE exam_sessions SET status = 1, submitted_at = datetime('now','localtime') WHERE id = ?").run(id);
+        }
+        return json(res, 200, { ok: true, data: { sessionId: id, status: 1, late, deadline: sess.deadline_ms, serverNow: now } });
+      }
+
       // 智能组卷：POST /api/paper/generate —— 契约 intelligent-paper-contract.md §4.1（行测 + 职测）
       if (pathname === '/api/paper/generate' && req.method === 'POST') {
         const raw = await readBody(req);
@@ -2505,8 +2569,14 @@ const server = http.createServer(async (req, res) => {
       // 提交一条做题记录（前端判分后自动上报）
       if (pathname === '/api/records' && req.method === 'POST') {
         const body = await readBody(req);
-        const { questionId, subject, chapter, type, selected, correct, costMs, paperId } = JSON.parse(body || '{}');
+        const { questionId, subject, chapter, type, selected, correct, costMs, paperId, examId } = JSON.parse(body || '{}');
         if (questionId == null) return err(res, 400, '缺少 questionId');
+        // 考试会话：超过截止时间（+15s 宽限）的作答不再记录
+        if (examId) {
+          const sess = pdb.prepare('SELECT user_id, deadline_ms FROM exam_sessions WHERE id = ?').get(String(examId));
+          if (!sess || sess.user_id !== req.user.id) return err(res, 403, '考试会话无效');
+          if (Date.now() > sess.deadline_ms + 15000) return err(res, 409, '考试已结束，本次作答未记录');
+        }
         // 来源归档：按题目真实来源算大模块/子模块（与错题本/收藏/笔记分组同口径），旧记录靠一键整理回填
         const cls = classifySource(questionId);
         const us = userScope(req);
